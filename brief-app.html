@@ -1,0 +1,1668 @@
+<!doctype html>
+<html lang="ka">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>დღიური ბრიფინგი</title>
+<style>
+  /* Deliberately single-theme: committed dark design — blue accent on
+     blue-grey dark grounds (user's spec), same in app and web. */
+  :root, :root[data-theme="light"], :root[data-theme="dark"] {
+    --ground: #15181E;
+    --surface: #1D222B;
+    --text: #E7EAF0;
+    --muted: #8B95A7;
+    --border: #2A3140;
+    --accent: #5B8DEF;
+    --accent-soft: #1E2A44;
+    --ok: #4CBB84;
+    --ok-soft: #172C23;
+    --warn: #E0A34A;
+    --warn-soft: #322517;
+    --crit: #E5766C;
+    --crit-soft: #35201D;
+    --track: #262C38;
+  }
+
+  * { box-sizing: border-box; scrollbar-width: none; }
+  *::-webkit-scrollbar { display: none; }
+  /* hidden must always win, even over display:flex classes */
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    background: var(--ground);
+    color: var(--text);
+    font-family: "Segoe UI", "Noto Sans Georgian", "Sylfaen", system-ui, sans-serif;
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  .app { display: flex; height: 100vh; }
+
+  /* Sidebar: day history (Electron only) */
+  .side {
+    width: 210px; min-width: 210px;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    display: flex; flex-direction: column;
+    overflow-y: auto;
+  }
+  body.web .side { display: none; }
+  .side-head {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--muted);
+    padding: 1.1rem 1rem 0.6rem;
+  }
+  .day-btn {
+    display: block; width: 100%; text-align: left;
+    background: none; border: none; border-left: 3px solid transparent;
+    font: inherit; color: var(--text); cursor: pointer;
+    padding: 0.55rem 1rem;
+  }
+  .day-btn:hover { background: var(--ground); }
+  .day-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .day-btn.active { border-left-color: var(--accent); background: var(--accent-soft); }
+  .day-date { font-weight: 600; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+  .day-sub { font-size: 0.74rem; color: var(--muted); }
+
+  .main { flex: 1; overflow-y: auto; padding: 2.5rem 1.25rem 4rem; }
+  .wrap { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 2rem; }
+
+  header .eyebrow {
+    font-size: 0.75rem; font-weight: 600; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 0.35rem;
+  }
+  header h1 { font-size: 1.75rem; font-weight: 700; margin: 0; line-height: 1.25; text-wrap: balance; }
+  header .date { color: var(--muted); font-size: 0.9rem; margin-top: 0.3rem; font-variant-numeric: tabular-nums; }
+
+  .tldr {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1.1rem 1.25rem; font-size: 0.98rem;
+  }
+  .tldr strong { color: var(--crit); }
+
+  h2 {
+    font-size: 0.8rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 0.75rem;
+  }
+
+  .progress-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.5rem; gap: 1rem; }
+  .progress-label { font-size: 0.9rem; color: var(--muted); }
+  .progress-num { font-weight: 700; font-size: 1.15rem; color: var(--text); font-variant-numeric: tabular-nums; }
+  .bar { height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; width: 0%; background: var(--ok); border-radius: 4px; transition: width 0.35s ease; }
+  @media (prefers-reduced-motion: reduce) { .bar-fill { transition: none; } }
+
+  .tasks { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 1rem; }
+  .task {
+    display: flex; gap: 0.85rem; align-items: flex-start;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.9rem 1rem; cursor: pointer;
+    transition: border-color 0.15s ease;
+  }
+  .task:hover { border-color: var(--accent); }
+  .task:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .task input {
+    appearance: none; -webkit-appearance: none;
+    width: 22px; height: 22px; min-width: 22px;
+    border: 2px solid var(--muted); border-radius: 6px;
+    margin: 0.15rem 0 0; cursor: pointer; position: relative; background: transparent;
+  }
+  .task input:checked { background: var(--ok); border-color: var(--ok); }
+  .task input:checked::after {
+    content: ""; position: absolute; left: 6px; top: 2px;
+    width: 5px; height: 10px;
+    border: solid #fff; border-width: 0 2.5px 2.5px 0;
+    transform: rotate(45deg);
+  }
+  .task input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .task-body { flex: 1; }
+  .task-title-row { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+  .task-title { font-weight: 600; font-size: 1rem; }
+  .weight {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--accent); background: var(--accent-soft);
+    padding: 0.1rem 0.5rem; border-radius: 99px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .task-desc { font-size: 0.88rem; color: var(--muted); margin-top: 0.25rem; }
+  .task.done { border-color: var(--ok); background: var(--ok-soft); }
+  .task.done .task-title { text-decoration: line-through; color: var(--muted); }
+  .task-title.custom { border-bottom: 1px dotted var(--accent); }
+  .edit-btn {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 0.85rem; padding: 0 0.25rem; border-radius: 4px; line-height: 1;
+  }
+  .edit-btn:hover { color: var(--accent); }
+  .edit-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .title-input {
+    font: inherit; font-weight: 600; flex: 1; min-width: 220px;
+    border: 1px solid var(--accent); border-radius: 6px;
+    padding: 0.1rem 0.4rem; background: var(--ground); color: var(--text);
+  }
+  .replan-btn {
+    margin-top: 0.8rem; align-self: flex-start;
+    background: var(--accent-soft); border: 1px solid var(--accent);
+    color: var(--accent); border-radius: 8px;
+    font: inherit; font-size: 0.85rem; font-weight: 600;
+    padding: 0.45rem 1rem; cursor: pointer;
+  }
+  .replan-btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
+  .replan-btn:disabled { opacity: 0.6; cursor: default; }
+  .replan-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .warns { display: flex; flex-direction: column; gap: 0.6rem; }
+  .warn-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 4px solid var(--warn); border-radius: 8px;
+    padding: 0.8rem 1rem; font-size: 0.92rem;
+  }
+  .warn-card.crit { border-left-color: var(--crit); }
+  .warn-card.crit .sev { color: var(--crit); background: var(--crit-soft); }
+  .warn-card.note { border-left-color: var(--muted); }
+  .warn-card.note .sev { color: var(--muted); background: var(--track); }
+  .sev {
+    display: inline-block; font-size: 0.68rem; font-weight: 700;
+    letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--warn); background: var(--warn-soft);
+    padding: 0.1rem 0.5rem; border-radius: 4px; margin-bottom: 0.3rem;
+  }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1.1rem 1.25rem;
+  }
+  .card ul { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.55rem; }
+  .card li { font-size: 0.93rem; }
+  .card p { margin: 0; font-size: 0.95rem; }
+  .card p + p { margin-top: 0.7rem; }
+  .card p.dim { color: var(--muted); }
+  .card h3 { margin: 0 0 0.5rem; font-size: 1.15rem; }
+  .card h4 {
+    margin: 1rem 0 0.4rem; font-size: 0.8rem; font-weight: 700;
+    letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted);
+  }
+  code {
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 0.85em; background: var(--accent-soft);
+    padding: 0.08em 0.35em; border-radius: 4px;
+  }
+  .reset-row { text-align: center; }
+  .reset-btn {
+    background: none; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--muted); font: inherit; font-size: 0.82rem;
+    padding: 0.4rem 1rem; cursor: pointer;
+  }
+  .reset-btn:hover { border-color: var(--muted); color: var(--text); }
+  .reset-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .error-box {
+    background: var(--crit-soft); border: 1px solid var(--crit);
+    border-radius: 8px; padding: 0.8rem 1rem; font-size: 0.9rem;
+  }
+
+  /* Sidebar view switch */
+  .nav { display: flex; flex-wrap: wrap; gap: 0.35rem; padding: 0.9rem 0.6rem 0.2rem; }
+  .nav-btn {
+    flex: 1 1 45%; background: none; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--muted); font: inherit; font-size: 0.8rem; font-weight: 600;
+    padding: 0.35rem 0; cursor: pointer;
+  }
+  .nav-btn:hover { color: var(--text); }
+  .nav-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+  /* Archive page */
+  .arch-list { display: flex; flex-direction: column; gap: 0.6rem; }
+  .arch-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.85rem 1rem; cursor: pointer;
+  }
+  .arch-card:hover { border-color: var(--accent); }
+  .arch-top { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; }
+  .arch-title { font-weight: 600; font-size: 0.95rem; }
+  .arch-meta { font-size: 0.7rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .arch-desc { font-size: 0.84rem; color: var(--muted); margin-top: 0.3rem; }
+  .arch-details { margin-top: 0.6rem; border-top: 1px solid var(--border); padding-top: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .arch-actions { display: flex; gap: 0.5rem; margin-top: 0.6rem; }
+  .arch-empty { color: var(--muted); font-size: 0.9rem; }
+
+  /* Analytics page */
+  .analytics-wrap { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 1.6rem; }
+  .an-sub { color: var(--muted); font-size: 0.85rem; margin: 0.2rem 0 0; }
+  .an-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.6rem; }
+  .an-tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem 1rem; }
+  .an-tile .v { font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: break-word; }
+  .an-tile .k { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 0.15rem; }
+  .an-section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.2rem 1.1rem; }
+  .an-section h2 { margin-bottom: 0.9rem; }
+  .an-row { display: grid; grid-template-columns: minmax(120px, 38%) 1fr auto; align-items: center; gap: 0.6rem; padding: 0.22rem 0; }
+  .an-row:hover { background: var(--ground); border-radius: 6px; }
+  .an-name { font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  .an-track { height: 10px; background: var(--track); border-radius: 5px; overflow: hidden; }
+  .an-fill { height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; }
+  .an-val { font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 3ch; text-align: right; }
+  .an-cols { display: flex; align-items: flex-end; gap: 3px; height: 110px; }
+  .an-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+  .an-col-fill { background: var(--accent); border-radius: 3px 3px 0 0; min-height: 2px; }
+  .an-col.dim .an-col-fill { background: var(--track); }
+  .an-col-labels { display: flex; gap: 3px; margin-top: 0.3rem; }
+  .an-col-label { flex: 1; font-size: 0.66rem; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+  .an-file-row { display: flex; justify-content: space-between; gap: 0.8rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border); font-size: 0.82rem; }
+  .an-file-row:last-child { border-bottom: none; }
+  .an-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .an-file-proj { color: var(--muted); font-size: 0.72rem; display: block; }
+  .an-file-count { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .an-empty { color: var(--muted); font-size: 0.85rem; }
+  .ai-run-row {
+    display: grid; grid-template-columns: 9rem 1fr auto auto auto;
+    gap: 0.8rem; align-items: baseline;
+    padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.82rem;
+  }
+  .ai-run-row:last-child { border-bottom: none; }
+  .ai-run-row .c { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ai-run-status-ok { color: var(--ok); font-size: 0.72rem; font-weight: 700; }
+  .ai-run-status-killed { color: var(--crit); font-size: 0.72rem; font-weight: 700; }
+  .ai-cur { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .ai-cur-label { font-weight: 600; font-size: 0.92rem; }
+  .ai-kill-btn {
+    background: var(--crit-soft); border: 1px solid var(--crit); color: var(--crit);
+    border-radius: 8px; font: inherit; font-size: 0.82rem; font-weight: 600;
+    padding: 0.4rem 0.9rem; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 0.4rem;
+  }
+  .ai-kill-btn:hover { background: var(--crit); color: #fff; }
+
+  /* Kanban board */
+  .kanban-wrap { max-width: 1400px; margin: 0 auto; }
+  .kb-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.8rem; margin-bottom: 1.2rem; }
+  .kb-head h1 { font-size: 1.4rem; font-weight: 700; margin: 0; }
+  .kb-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .ic { width: 14px; height: 14px; flex: none; }
+  .kb-btn {
+    background: var(--accent-soft); border: 1px solid var(--accent); color: var(--accent);
+    border-radius: 8px; font: inherit; font-size: 0.82rem; font-weight: 600;
+    padding: 0.4rem 0.9rem; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 0.4rem;
+  }
+  .kb-btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
+  .kb-btn:disabled { opacity: 0.6; cursor: default; }
+  .kb-btn.ghost { background: none; border-color: var(--border); color: var(--muted); }
+  .kb-btn.ghost:hover:not(:disabled) { background: var(--surface); color: var(--text); }
+  .kb-btn-danger { background: var(--crit-soft); border-color: var(--crit); color: var(--crit); }
+  .kb-btn-danger:hover:not(:disabled) { background: var(--crit); color: #fff; }
+  .board { display: flex; gap: 0.8rem; overflow-x: auto; align-items: flex-start; padding-bottom: 1rem; }
+  .kb-col {
+    min-width: 258px; width: 258px; flex: none;
+    background: #1A1E26; border: 1px solid var(--border); border-radius: 10px;
+    display: flex; flex-direction: column; max-height: calc(100vh - 190px);
+  }
+  .kb-col.drag-over { border-color: var(--accent); }
+  .kb-col-head { display: flex; align-items: center; padding: 0.7rem 0.85rem 0.55rem; gap: 0.5rem; }
+  .kb-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dot-urgent { background: var(--crit); }
+  .dot-important { background: var(--warn); }
+  .dot-planning { background: var(--accent); }
+  .dot-delayed { background: var(--muted); }
+  .dot-done { background: var(--ok); }
+  .kb-col-name {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--text);
+  }
+  .kb-col-title {
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+    padding: 0.15rem 0.55rem; border-radius: 99px;
+  }
+  .st-urgent { color: var(--crit); background: var(--crit-soft); }
+  .st-important { color: var(--warn); background: var(--warn-soft); }
+  .st-planning { color: var(--accent); background: var(--accent-soft); }
+  .st-delayed { color: var(--muted); background: var(--track); }
+  .st-done { color: var(--ok); background: var(--ok-soft); }
+  .kb-count { font-size: 0.72rem; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+  .kb-add-btn { background: none; border: none; color: var(--muted); font-size: 1.05rem; cursor: pointer; line-height: 1; padding: 0 0.2rem; }
+  .kb-add-btn:hover { color: var(--accent); }
+  .kb-add-input {
+    width: 100%; margin: 0; resize: none; font: inherit; font-size: 0.84rem;
+    border: 1px solid var(--accent); border-radius: 8px;
+    padding: 0.4rem 0.55rem; background: var(--surface); color: var(--text);
+  }
+  .kb-add-input:focus { outline: none; }
+  .kb-cards { display: flex; flex-direction: column; gap: 0.45rem; padding: 0 0.55rem 0.4rem; overflow-y: auto; min-height: 8px; }
+  .kb-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.55rem 0.65rem; cursor: pointer;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.35);
+  }
+  .kb-card:hover { border-color: var(--accent); }
+  .kb-card.dragging { opacity: 0.45; }
+  .kb-card.is-done .kb-title { text-decoration: line-through; color: var(--muted); }
+  .kb-title { font-weight: 600; font-size: 0.87rem; overflow-wrap: break-word; }
+  .kb-badges { display: flex; gap: 0.35rem; margin-top: 0.4rem; flex-wrap: wrap; }
+  .kb-chip {
+    font-size: 0.66rem; color: var(--muted); background: var(--track);
+    padding: 0.08rem 0.45rem; border-radius: 99px;
+    display: inline-flex; align-items: center; gap: 0.25rem;
+  }
+  .kb-chip .ic { width: 11px; height: 11px; }
+  .kb-chip-ai { color: var(--accent); background: var(--accent-soft); font-weight: 700; }
+  .kb-chip-note { color: var(--accent); background: var(--accent-soft); }
+  .kb-addcard {
+    background: none; border: none; text-align: left;
+    color: var(--muted); font: inherit; font-size: 0.8rem;
+    padding: 0.45rem 0.75rem 0.6rem; cursor: pointer; border-radius: 0 0 10px 10px;
+    display: inline-flex; align-items: center; gap: 0.35rem;
+  }
+  .kb-addcard .ic { width: 12px; height: 12px; }
+  .kb-addcard:hover { color: var(--accent); background: var(--accent-soft); }
+
+  /* Trello-style card detail modal */
+  .kb-overlay {
+    position: fixed; inset: 0; background: rgba(8, 10, 14, 0.72);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 7vh 1rem 2rem; z-index: 50; overflow-y: auto;
+  }
+  .kb-modal {
+    width: 100%; max-width: 620px;
+    background: var(--ground); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.2rem 1.4rem 1.1rem;
+    display: flex; flex-direction: column; gap: 0.75rem;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.5);
+  }
+  .kb-m-title {
+    font: inherit; font-size: 1.1rem; font-weight: 700;
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    color: var(--text); padding: 0.25rem 0.45rem; width: 100%;
+  }
+  .kb-m-title:hover { border-color: var(--border); }
+  .kb-m-title:focus { border-color: var(--accent); outline: none; background: var(--surface); }
+  .kb-m-meta { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+  .kb-m-status {
+    font: inherit; font-size: 0.82rem; font-weight: 600;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 0.3rem 0.5rem;
+  }
+  .kb-m-by { font-size: 0.74rem; color: var(--muted); }
+  .kb-m-h {
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--muted); margin-top: 0.3rem;
+  }
+  .kb-m-desc {
+    width: 100%; font: inherit; font-size: 0.88rem; min-height: 64px; resize: vertical;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.6rem;
+  }
+  .kb-m-desc:focus { border-color: var(--accent); outline: none; }
+  .kb-m-ai {
+    border-left: 2px solid var(--accent); padding-left: 0.65rem;
+    display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.82rem;
+  }
+  .kb-m-ai .at, .kb-comment .at { color: var(--muted); font-size: 0.68rem; }
+  .kb-m-comments { display: flex; flex-direction: column; gap: 0.4rem; }
+  .kb-comment { font-size: 0.85rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.6rem; }
+  .kb-comment .by { font-weight: 700; font-size: 0.66rem; color: var(--muted); margin-right: 0.35rem; text-transform: uppercase; }
+  .kb-cin { display: flex; gap: 0.4rem; }
+  .kb-cin input {
+    flex: 1; min-width: 0; font: inherit; font-size: 0.85rem;
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.4rem 0.6rem; background: var(--surface); color: var(--text);
+  }
+  .kb-cin input:focus { border-color: var(--accent); outline: none; }
+  .kb-cin button { border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); border-radius: 8px; cursor: pointer; font: inherit; font-size: 0.8rem; padding: 0 0.7rem; }
+  .kb-cin button:hover { background: var(--accent); color: #fff; }
+  .kb-m-foot { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.4rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
+  .kb-chip-ok { color: var(--ok); background: var(--ok-soft); }
+  .kb-subtasks { display: flex; flex-direction: column; gap: 0.3rem; }
+  .kb-st-row {
+    display: flex; align-items: center; gap: 0.55rem;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.35rem 0.6rem; font-size: 0.84rem;
+  }
+  .kb-st-row input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none;
+    width: 16px; height: 16px; min-width: 16px;
+    border: 2px solid var(--muted); border-radius: 4px;
+    cursor: pointer; position: relative; background: transparent; margin: 0;
+  }
+  .kb-st-row input[type="checkbox"]:checked { background: var(--ok); border-color: var(--ok); }
+  .kb-st-row input[type="checkbox"]:checked::after {
+    content: ""; position: absolute; left: 4px; top: 1px;
+    width: 4px; height: 8px;
+    border: solid #fff; border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+  .kb-st-text { flex: 1; overflow-wrap: break-word; }
+  .kb-st-row.done .kb-st-text { text-decoration: line-through; color: var(--muted); }
+  .kb-m-dirs { display: flex; flex-direction: column; gap: 0.3rem; }
+  .kb-dir-row {
+    display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.3rem 0.6rem; font-size: 0.78rem;
+  }
+  .kb-dir-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-variant-numeric: tabular-nums; }
+  .kb-dir-del { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 0.2rem; display: inline-flex; align-items: center; }
+  .kb-dir-del .ic { width: 12px; height: 12px; }
+  .kb-dir-del:hover { color: var(--crit); }
+  .kb-dir-empty { color: var(--muted); font-size: 0.78rem; }
+  .kb-dir-add { align-self: flex-start; }
+  /* Bottom AI-activity popup */
+  .ai-popup {
+    position: fixed; bottom: 1.1rem; left: 50%; transform: translateX(-50%);
+    width: min(440px, calc(100vw - 2rem));
+    background: var(--surface); border: 1px solid var(--accent); border-radius: 12px;
+    padding: 0.75rem 1rem 0.85rem; z-index: 60;
+    box-shadow: 0 10px 34px rgba(0,0,0,0.5);
+  }
+  .ai-popup-row { display: flex; justify-content: space-between; align-items: baseline; gap: 0.8rem; margin-bottom: 0.5rem; }
+  .ai-popup-label { font-size: 0.84rem; font-weight: 600; }
+  .ai-popup-label::before {
+    content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); margin-right: 0.5rem;
+    animation: ai-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes ai-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  @media (prefers-reduced-motion: reduce) { .ai-popup-label::before { animation: none; } }
+  .ai-popup-time { font-size: 0.74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ai-bar { height: 6px; background: var(--track); border-radius: 3px; overflow: hidden; }
+  .ai-bar-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 3px; transition: width 0.9s linear; }
+  .ai-popup-est { margin-top: 0.45rem; font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .kb-archive { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
+  .kb-archive-item { font-size: 0.82rem; color: var(--muted); padding: 0.25rem 0; }
+  .kb-archive-item .at { font-size: 0.68rem; margin-left: 0.4rem; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="side" aria-label="ნავიგაცია">
+    <div class="nav">
+      <button id="nav-brief" class="nav-btn active">ბრიფინგი</button>
+      <button id="nav-kanban" class="nav-btn">კანბანი</button>
+      <button id="nav-archive" class="nav-btn">არქივი</button>
+      <button id="nav-analytics" class="nav-btn">ანალიტიკა</button>
+      <button id="nav-ai" class="nav-btn">AI</button>
+    </div>
+    <div class="side-head" id="history-head">ისტორია</div>
+    <nav id="day-list"></nav>
+  </aside>
+  <div class="main">
+    <div class="wrap" id="content"></div>
+    <div class="kanban-wrap" id="kanban-view" hidden>
+      <div class="kb-head">
+        <h1>კანბანი</h1>
+        <div class="kb-actions">
+          <button class="kb-btn" id="kb-check" title="AI შეამოწმებს რა შეიცვალა დირექტორიებში და თითო ტასკს მიუწერს ცვლილებებს">მიმდინარეს შემოწმება</button>
+          <button class="kb-btn" id="kb-replan" title="AI სამომავლო გეგმას გადააწყობს შესრულებული/შექმნილი ტასკებისა და სტატუსების მიხედვით">სამომავლო გადაგეგმვა</button>
+        </div>
+      </div>
+      <div class="board" id="board"></div>
+    </div>
+    <div class="wrap" id="archive-view" hidden>
+      <header>
+        <p class="eyebrow">DailyBrief</p>
+        <h1>არქივი</h1>
+        <p class="date" id="archive-count"></p>
+      </header>
+      <div class="arch-list" id="archive-list"></div>
+    </div>
+    <div class="analytics-wrap" id="analytics-view" hidden>
+      <header>
+        <p class="eyebrow">DailyBrief</p>
+        <h1>ანალიტიკა</h1>
+        <p class="an-sub">ბოლო 7 დღე · ფონური მონიტორინგი ყოველ 30 წუთში, AI-ის გარეშე</p>
+      </header>
+      <div class="an-tiles" id="an-tiles"></div>
+      <section class="an-section">
+        <h2>პროექტების აქტივობა კვირაში</h2>
+        <div id="an-projects"></div>
+      </section>
+      <section class="an-section">
+        <h2>აქტიური საათები</h2>
+        <div id="an-hours"></div>
+      </section>
+      <section class="an-section">
+        <h2>დღეების დატვირთვა</h2>
+        <div id="an-days"></div>
+      </section>
+      <section class="an-section">
+        <h2>ხშირად შეცვლილი ფაილები</h2>
+        <div id="an-files"></div>
+      </section>
+    </div>
+    <div class="analytics-wrap" id="ai-view" hidden>
+      <header>
+        <p class="eyebrow">DailyBrief</p>
+        <h1>AI — მოხმარება და პროცესები</h1>
+        <p class="an-sub">გაშვებების ისტორია, ტოკენები და ღირებულება; მიმდინარე პროცესის გათიშვა</p>
+      </header>
+      <section class="an-section">
+        <h2>მიმდინარე პროცესი</h2>
+        <div id="ai-current"></div>
+        <div style="margin-top:0.7rem;">
+          <button class="kb-btn ghost" id="ai-context-btn" title="ბოლო გაშვების prompt + digest გაიხსნება ტექსტურ ფაილად">კონტექსტის ნახვა (TXT)</button>
+        </div>
+      </section>
+      <div class="an-tiles" id="ai-tiles"></div>
+      <section class="an-section">
+        <h2>გაშვებების ისტორია</h2>
+        <div id="ai-runs"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+  ყოველდღიური განახლება: შეცვალე მხოლოდ BRIEF ობიექტი ქვემოთ,
+  BRIEF-DATA-START და BRIEF-DATA-END მარკერებს შორის. დანარჩენს ნუ ეხები.
+  ფორმატი: მკაცრი JSON (ყველა გასაღები ორმაგ ბრჭყალებში) — pipeline-სკრიპტი
+  ამ ბლოკს ავტომატურად ინახავს core\briefs\<date>.json-ად ისტორიისთვის.
+
+  ველები:
+    date        — "YYYY-MM-DD" (მონიშვნების გასაღები — ყოველ დღეს ახალი)
+    dateLabel   — სათაურის ქვეშ საჩვენებელი ტექსტი
+    tldr        — შეჯამება; **მუქი** და `კოდი` მუშაობს
+    tasks[]     — {id, title, desc, weight (0-100, დროის წილი), badge (ჩიპის ტექსტი)}
+    warnings[]  — {sev: "crit"|"warn"|"note", label, text}
+    recap[]     — ტექსტების სია
+    assessment[] — აბზაცების სია; პირველი ჩვეულებრივი, დანარჩენი მკრთალი
+*/
+/*BRIEF-DATA-START*/
+const BRIEF = {
+  "date": "2026-01-01",
+  "dateLabel": "სადემო მონაცემები — რეალურს pipeline წერს",
+  "tldr": "ეს სადემო ბრიფინგია. დილის გაშვება ამ ბლოკს ავტომატურად ჩაანაცვლებს რეალური მონაცემებით.",
+  "tasks": [
+    {
+      "id": "demo-task",
+      "title": "სადემო ამოცანა",
+      "desc": "აღწერის მაგალითი.",
+      "weight": 100,
+      "badge": "100% დროის"
+    }
+  ],
+  "warnings": [
+    {
+      "sev": "note",
+      "label": "ინფო",
+      "text": "გაფრთხილებების მაგალითი."
+    }
+  ],
+  "recap": [
+    "აქტივობის შეჯამების მაგალითი."
+  ],
+  "assessment": [
+    "შეფასების მაგალითი."
+  ]
+};
+/*BRIEF-DATA-END*/
+
+(function () {
+  var api = window.dailybrief || null;
+  var content = document.getElementById("content");
+  var dayList = document.getElementById("day-list");
+
+  // Minimal inline markup: escape HTML first, then **bold** and `code`.
+  function md(s) {
+    return String(s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>");
+  }
+
+  function el(tag, cls, html) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html !== undefined) e.innerHTML = html;
+    return e;
+  }
+
+  /* Inline SVG icons (feather-style, currentColor) — no emoji in the UI. */
+  var ICONS = {
+    folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+    activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+    comment: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    check: '<polyline points="20 6 9 17 4 12"/>',
+    restore: '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>',
+    x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+    replan: '<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',
+    plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'
+  };
+  function icon(name) {
+    return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICONS[name] || "") + '</svg>';
+  }
+
+  /* ---- renderers ---- */
+
+  function renderBrief(brief, opts) {
+    content.innerHTML = "";
+
+    var header = el("header");
+    header.style.display = "flex";
+    header.style.flexDirection = "column";
+    header.appendChild(el("p", "eyebrow", "DailyBrief"));
+    header.appendChild(el("h1", null, "დღიური ბრიფინგი"));
+    header.appendChild(el("p", "date", md(brief.dateLabel || brief.date)));
+    if (opts && opts.canReplan) {
+      var replanBtn = el("button", "replan-btn", "დღის გადაგეგმვა");
+      replanBtn.title = "Claude დღევანდელ გეგმას თავიდან შეადგენს — მონიშნული ამოცანები ამოვარდება, დარჩენილი ახლიდან დაიგეგმება";
+      replanBtn.addEventListener("click", async function () {
+        if (!confirm("დღევანდელი გეგმა თავიდან დაიგეგმება: შესრულებულად მონიშნული ამოცანები ამოვარდება, დარჩენილი ახლიდან გადანაწილდება. ამას რამდენიმე წუთი სჭირდება. გავაგრძელო?")) return;
+        replanBtn.disabled = true;
+        replanBtn.textContent = "იგეგმება… ფანჯარა თავად განახლდება";
+        var ok = await api.replan();
+        if (!ok) replanBtn.textContent = "დაგეგმვა უკვე მიმდინარეობს…";
+      });
+      header.appendChild(replanBtn);
+    }
+    content.appendChild(header);
+
+    if (brief.tldr) content.appendChild(el("div", "tldr", md(brief.tldr)));
+
+    /* warnings */
+    if (brief.warnings && brief.warnings.length) {
+      var warnSection = el("section");
+      warnSection.appendChild(el("h2", null, "გაფრთხილებები"));
+      var warns = el("div", "warns");
+      brief.warnings.forEach(function (w) {
+        var cls = "warn-card" + (w.sev === "crit" ? " crit" : w.sev === "note" ? " note" : "");
+        warns.appendChild(el("div", cls,
+          '<span class="sev">' + md(w.label || w.sev) + '</span><div>' + md(w.text) + '</div>'));
+      });
+      warnSection.appendChild(warns);
+      content.appendChild(warnSection);
+    }
+
+    /* recap */
+    if (brief.recap && brief.recap.length) {
+      var recapSection = el("section");
+      recapSection.appendChild(el("h2", null, "რას აკეთებდი"));
+      var card = el("div", "card");
+      var ul = el("ul");
+      brief.recap.forEach(function (r) { ul.appendChild(el("li", null, md(r))); });
+      card.appendChild(ul);
+      recapSection.appendChild(card);
+      content.appendChild(recapSection);
+    }
+
+    /* assessment */
+    if (brief.assessment && brief.assessment.length) {
+      var aSection = el("section");
+      aSection.appendChild(el("h2", null, "გზა სწორია?"));
+      var aCard = el("div", "card");
+      brief.assessment.forEach(function (a, i) {
+        aCard.appendChild(el("p", i > 0 ? "dim" : null, md(a)));
+      });
+      aSection.appendChild(aCard);
+      content.appendChild(aSection);
+    }
+
+  }
+
+  // Legacy markdown briefings (before the app existed): read-only text view.
+  function renderLegacy(date, text) {
+    content.innerHTML = "";
+    var header = el("header");
+    header.appendChild(el("p", "eyebrow", "DailyBrief · არქივი"));
+    header.appendChild(el("h1", null, "ბრიფინგი — " + date));
+    header.appendChild(el("p", "date", "ძველი ფორმატი (markdown), მხოლოდ საკითხავი"));
+    content.appendChild(header);
+
+    var card = el("div", "card");
+    var listEl = null;
+    text.split(/\r?\n/).forEach(function (line) {
+      var t = line.trim();
+      if (!t) { listEl = null; return; }
+      if (t.startsWith("- ") || t.startsWith("* ")) {
+        if (!listEl) { listEl = el("ul"); card.appendChild(listEl); }
+        listEl.appendChild(el("li", null, md(t.slice(2))));
+        return;
+      }
+      listEl = null;
+      if (t.startsWith("### ")) card.appendChild(el("h4", null, md(t.slice(4))));
+      else if (t.startsWith("## ")) card.appendChild(el("h4", null, md(t.slice(3))));
+      else if (t.startsWith("# ")) card.appendChild(el("h3", null, md(t.slice(2))));
+      else card.appendChild(el("p", null, md(t)));
+    });
+    content.appendChild(card);
+  }
+
+  function renderError(message) {
+    content.innerHTML = "";
+    content.appendChild(el("div", "error-box", md(message)));
+  }
+
+  /* ---- sidebar / bootstrap ---- */
+
+  function todayISO() {
+    var today = new Date();
+    return today.getFullYear() + "-" +
+      String(today.getMonth() + 1).padStart(2, "0") + "-" +
+      String(today.getDate()).padStart(2, "0");
+  }
+
+  function dayLabel(dateStr) {
+    if (dateStr === todayISO()) return "დღეს";
+    try {
+      return new Date(dateStr + "T00:00:00").toLocaleDateString("ka-GE", { weekday: "long" });
+    } catch (e) { return ""; }
+  }
+
+  async function selectDay(day, btn) {
+    Array.prototype.forEach.call(dayList.querySelectorAll(".day-btn"), function (b) {
+      b.classList.toggle("active", b === btn);
+    });
+    var data = await api.loadDay(day.date);
+    if (!data) { renderError("ფაილი ვერ მოიძებნა: " + day.date); return; }
+    if (data.kind === "error") { renderError(data.message); return; }
+    if (data.kind === "md") { renderLegacy(day.date, data.text); return; }
+    renderBrief(data.brief, { canReplan: day.date === todayISO() });
+  }
+
+  async function initElectron() {
+    var days = await api.listDays();
+    if (!days.length) {
+      renderBrief(BRIEF, { canReplan: BRIEF.date === todayISO() });
+      return;
+    }
+    days.forEach(function (day, i) {
+      var btn = el("button", "day-btn",
+        '<div class="day-date">' + md(day.date) + '</div>' +
+        '<div class="day-sub">' + md(dayLabel(day.date)) + (day.kind === "md" ? " · არქივი" : "") + '</div>');
+      btn.addEventListener("click", function () { selectDay(day, btn); });
+      dayList.appendChild(btn);
+      if (i === 0) selectDay(day, btn);
+    });
+  }
+
+  /* ---- kanban board ---- */
+
+  var KB_COLS = [
+    { key: "urgent", label: "სასწრაფო", cls: "st-urgent" },
+    { key: "important", label: "მნიშვნელოვანი", cls: "st-important" },
+    { key: "planning", label: "დასაგეგმი", cls: "st-planning" },
+    { key: "delayed", label: "გადადებული", cls: "st-delayed" },
+    { key: "done", label: "დასრულებული", cls: "st-done" }
+  ];
+
+  var kanbanStore = api
+    ? { load: function () { return api.kanbanLoad(); },
+        save: function (data) { return api.kanbanSave(data); } }
+    : { load: function () {
+          try { return Promise.resolve(JSON.parse(localStorage.getItem("dailybrief-kanban")) || { tasks: [], archive: [] }); }
+          catch (e) { return Promise.resolve({ tasks: [], archive: [] }); }
+        },
+        save: function (data) {
+          try { localStorage.setItem("dailybrief-kanban", JSON.stringify(data)); } catch (e) {}
+          return Promise.resolve(true);
+        } };
+
+  var kb = { tasks: [], archive: [] };
+  var boardEl = document.getElementById("board");
+  var archiveListEl = document.getElementById("archive-list");
+  var archiveCountEl = document.getElementById("archive-count");
+
+  function saveKb() { kanbanStore.save(kb); }
+  function nowISO() { return new Date().toISOString(); }
+  function shortAt(iso) { return String(iso || "").slice(5, 16).replace("T", " "); }
+
+  function newTaskId() {
+    return "u" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  var dragging = false;
+
+  function buildCard(t) {
+    var badges = [];
+    if (t.createdBy === "ai") badges.push('<span class="kb-chip kb-chip-ai">AI</span>');
+    if ((t.subtasks || []).length) {
+      var stDone = t.subtasks.filter(function (s) { return s.done; }).length;
+      badges.push('<span class="kb-chip' + (stDone === t.subtasks.length ? ' kb-chip-ok' : '') + '">' +
+        icon("check") + stDone + "/" + t.subtasks.length + '</span>');
+    }
+    if ((t.dirs || []).length) badges.push('<span class="kb-chip kb-chip-note">' + icon("folder") + t.dirs.length + '</span>');
+    if ((t.aiNotes || []).length) badges.push('<span class="kb-chip kb-chip-note">' + icon("activity") + t.aiNotes.length + '</span>');
+    if ((t.comments || []).length) badges.push('<span class="kb-chip">' + icon("comment") + t.comments.length + '</span>');
+    var card = el("div", "kb-card" + (t.done ? " is-done" : ""),
+      '<div class="kb-title">' + md(t.title) + '</div>' +
+      (badges.length ? '<div class="kb-badges">' + badges.join("") + '</div>' : ''));
+    card.draggable = true;
+    card.addEventListener("dragstart", function (e) {
+      dragging = true;
+      e.dataTransfer.setData("text/plain", t.id);
+      card.classList.add("dragging");
+    });
+    card.addEventListener("dragend", function () {
+      card.classList.remove("dragging");
+      setTimeout(function () { dragging = false; }, 50);
+    });
+    card.addEventListener("click", function () { if (!dragging) openModal(t.id); });
+    return card;
+  }
+
+  function renderKanban() {
+    boardEl.innerHTML = "";
+    KB_COLS.forEach(function (col) {
+      var items = kb.tasks.filter(function (t) {
+        return col.key === "done" ? t.done : (!t.done && (t.status || "planning") === col.key);
+      }).sort(function (a, b) { return String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")); });
+
+      var colEl = el("div", "kb-col");
+      colEl.appendChild(el("div", "kb-col-head",
+        '<span class="kb-dot dot-' + col.key + '"></span>' +
+        '<span class="kb-col-name">' + col.label + '</span>' +
+        '<span class="kb-count">' + items.length + '</span>'));
+
+      var cards = el("div", "kb-cards");
+      items.forEach(function (t) { cards.appendChild(buildCard(t)); });
+      colEl.appendChild(cards);
+
+      if (col.key !== "done") {
+        var addBtn = el("button", "kb-addcard", icon("plus") + "ბარათის დამატება");
+        addBtn.addEventListener("click", function () {
+          if (colEl.querySelector(".kb-add-input")) return;
+          var inp = document.createElement("textarea");
+          inp.className = "kb-add-input";
+          inp.placeholder = "სათაური… (Enter — შენახვა)";
+          inp.rows = 2;
+          inp.maxLength = 300;
+          cards.appendChild(inp);
+          cards.scrollTop = cards.scrollHeight;
+          inp.focus();
+          var finished = false;
+          function finish(saveIt) {
+            if (finished) return;
+            finished = true;
+            var txt = inp.value.trim();
+            if (saveIt && txt) {
+              kb.tasks.push({
+                id: newTaskId(), title: txt, desc: "", status: col.key, done: false,
+                createdBy: "user", createdAt: nowISO(), updatedAt: nowISO(),
+                comments: [], aiNotes: []
+              });
+              saveKb();
+            }
+            renderKanban();
+          }
+          inp.addEventListener("keydown", function (ev) {
+            if (ev.key === "Enter") { ev.preventDefault(); finish(true); }
+            if (ev.key === "Escape") finish(false);
+          });
+          inp.addEventListener("blur", function () { finish(true); });
+        });
+        colEl.appendChild(addBtn);
+      }
+
+      colEl.addEventListener("dragover", function (e) { e.preventDefault(); colEl.classList.add("drag-over"); });
+      colEl.addEventListener("dragleave", function () { colEl.classList.remove("drag-over"); });
+      colEl.addEventListener("drop", async function (e) {
+        e.preventDefault();
+        colEl.classList.remove("drag-over");
+        // Folder dropped from Explorer: create a task named after it,
+        // link the folder, and jump straight to the description field.
+        if (e.dataTransfer.files && e.dataTransfer.files.length && api && api.getPathForFile) {
+          var p = api.getPathForFile(e.dataTransfer.files[0]);
+          if (!p) return;
+          var info = await api.dirInfo(p);
+          if (!info) return;
+          // Never create silently — the user confirms first.
+          if (!confirm("შეიქმნას ტასკი ფოლდერისთვის: " + info.name + "?")) return;
+          var nt = {
+            id: newTaskId(), title: info.name, desc: "",
+            status: col.key === "done" ? "planning" : col.key, done: false,
+            createdBy: "user", createdAt: nowISO(), updatedAt: nowISO(),
+            comments: [], aiNotes: [], dirs: [info.dir], subtasks: []
+          };
+          kb.tasks.push(nt);
+          saveKb(); renderKanban();
+          // Baseline scan starts immediately (git-aware, no AI).
+          if (api.scanFolder) api.scanFolder(nt.id, info.dir);
+          openModal(nt.id, true);
+          return;
+        }
+        var id = e.dataTransfer.getData("text/plain");
+        var t = kb.tasks.find(function (x) { return x.id === id; });
+        if (!t) return;
+        if (col.key === "done") { t.done = true; }
+        else { t.done = false; t.status = col.key; }
+        t.updatedAt = nowISO();
+        saveKb(); renderKanban();
+      });
+
+      boardEl.appendChild(colEl);
+    });
+  }
+
+  /* Trello-style card detail modal */
+
+  var modalOverlay = null;
+  function closeModal() {
+    if (modalOverlay) { modalOverlay.remove(); modalOverlay = null; }
+  }
+  document.addEventListener("keydown", function (ev) { if (ev.key === "Escape") closeModal(); });
+
+  function openModal(id, focusDesc) {
+    var t = kb.tasks.find(function (x) { return x.id === id; });
+    if (!t) return;
+    closeModal();
+    modalOverlay = el("div", "kb-overlay");
+    var m = el("div", "kb-modal");
+
+    var titleIn = document.createElement("input");
+    titleIn.className = "kb-m-title";
+    titleIn.value = t.title;
+    titleIn.maxLength = 300;
+    titleIn.addEventListener("change", function () {
+      if (titleIn.value.trim()) {
+        t.title = titleIn.value.trim();
+        t.updatedAt = nowISO();
+        saveKb(); renderKanban();
+      }
+    });
+    m.appendChild(titleIn);
+
+    var meta = el("div", "kb-m-meta");
+    var sel = document.createElement("select");
+    sel.className = "kb-m-status";
+    KB_COLS.forEach(function (c) {
+      if (c.key === "done" && !t.done) return;
+      var o = document.createElement("option");
+      o.value = c.key;
+      o.textContent = c.label;
+      if (t.done ? c.key === "done" : c.key === (t.status || "planning")) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener("change", function () {
+      if (sel.value === "done") { t.done = true; }
+      else { t.done = false; t.status = sel.value; }
+      t.updatedAt = nowISO();
+      saveKb(); renderKanban();
+    });
+    meta.appendChild(sel);
+    meta.appendChild(el("span", "kb-m-by",
+      (t.createdBy === "ai" ? "შექმნა AI-მ" : "შენ შექმენი") + " · " + md(shortAt(t.createdAt))));
+    m.appendChild(meta);
+
+    m.appendChild(el("div", "kb-m-h", "აღწერა"));
+    var desc = document.createElement("textarea");
+    desc.className = "kb-m-desc";
+    desc.value = t.desc || "";
+    desc.placeholder = "დაამატე აღწერა…";
+    desc.maxLength = 2000;
+    desc.addEventListener("change", function () {
+      t.desc = desc.value.trim();
+      t.updatedAt = nowISO();
+      saveKb(); renderKanban();
+    });
+    m.appendChild(desc);
+
+    /* subtasks checklist — separate from the free-text description */
+    m.appendChild(el("div", "kb-m-h", "ქვეტასკები"));
+    var stBox = el("div", "kb-subtasks");
+    function paintSubtasks() {
+      stBox.innerHTML = "";
+      (t.subtasks || []).forEach(function (s, idx) {
+        var row = el("div", "kb-st-row" + (s.done ? " done" : ""),
+          '<input type="checkbox"' + (s.done ? " checked" : "") + '>' +
+          '<span class="kb-st-text">' + md(s.text) + '</span>' +
+          '<button class="kb-dir-del" title="წაშლა">' + icon("x") + '</button>');
+        row.querySelector("input").addEventListener("change", function (ev) {
+          t.subtasks[idx].done = ev.target.checked;
+          t.updatedAt = nowISO();
+          saveKb(); paintSubtasks(); renderKanban();
+        });
+        row.querySelector(".kb-dir-del").addEventListener("click", function () {
+          t.subtasks.splice(idx, 1);
+          t.updatedAt = nowISO();
+          saveKb(); paintSubtasks(); renderKanban();
+        });
+        stBox.appendChild(row);
+      });
+      var addRow = el("div", "kb-cin",
+        '<input type="text" placeholder="ახალი ქვეტასკი… (Enter)" maxlength="300"><button>' + icon("plus") + '</button>');
+      var addIn = addRow.querySelector("input");
+      function addSub() {
+        var txt = addIn.value.trim();
+        if (!txt) return;
+        t.subtasks = t.subtasks || [];
+        t.subtasks.push({ text: txt, done: false });
+        t.updatedAt = nowISO();
+        saveKb(); paintSubtasks(); renderKanban();
+        stBox.querySelector(".kb-cin input").focus();
+      }
+      addRow.querySelector("button").addEventListener("click", addSub);
+      addIn.addEventListener("keydown", function (ev) { if (ev.key === "Enter") addSub(); });
+      stBox.appendChild(addRow);
+    }
+    paintSubtasks();
+    m.appendChild(stBox);
+
+    /* linked folders: the AI check watches these paths first */
+    m.appendChild(el("div", "kb-m-h", "დაკავშირებული ფოლდერები — AI ამ გზებს დააკვირდება"));
+    var dirsBox = el("div", "kb-m-dirs");
+    function paintDirs() {
+      dirsBox.innerHTML = "";
+      (t.dirs || []).forEach(function (d) {
+        var row = el("div", "kb-dir-row",
+          '<span class="kb-dir-path" title="' + md(d) + '">' + md(d) + '</span>' +
+          '<button class="kb-dir-del" title="მოხსნა">' + icon("x") + '</button>');
+        row.querySelector(".kb-dir-del").addEventListener("click", function () {
+          t.dirs = (t.dirs || []).filter(function (x) { return x !== d; });
+          t.updatedAt = nowISO();
+          saveKb(); paintDirs(); renderKanban();
+        });
+        dirsBox.appendChild(row);
+      });
+      if (!(t.dirs || []).length) {
+        dirsBox.appendChild(el("div", "kb-dir-empty", "ფოლდერი მიბმული არ არის."));
+      }
+    }
+    paintDirs();
+    m.appendChild(dirsBox);
+    if (api && api.pickFolder) {
+      var addDirBtn = el("button", "kb-btn ghost kb-dir-add", icon("plus") + "ფოლდერის მიბმა");
+      addDirBtn.addEventListener("click", async function () {
+        var p = await api.pickFolder();
+        if (!p) return;
+        t.dirs = t.dirs || [];
+        if (t.dirs.indexOf(p) === -1) {
+          t.dirs.push(p);
+          t.updatedAt = nowISO();
+          saveKb(); paintDirs(); renderKanban();
+          if (api.scanFolder) api.scanFolder(t.id, p);
+        }
+      });
+      m.appendChild(addDirBtn);
+    }
+
+    if ((t.aiNotes || []).length) {
+      m.appendChild(el("div", "kb-m-h", "AI — რა შეიცვალა"));
+      var aiBox = el("div", "kb-m-ai");
+      t.aiNotes.slice().reverse().forEach(function (n) {
+        aiBox.appendChild(el("div", null, md(n.text) + ' <span class="at">' + md(shortAt(n.at)) + '</span>'));
+      });
+      m.appendChild(aiBox);
+    }
+
+    m.appendChild(el("div", "kb-m-h", "კომენტარები"));
+    var cbox = el("div", "kb-m-comments");
+    (t.comments || []).forEach(function (c) {
+      cbox.appendChild(el("div", "kb-comment",
+        '<span class="by">' + (c.by === "ai" ? "AI" : "შენ") + '</span>' + md(c.text) +
+        ' <span class="at">' + md(shortAt(c.at)) + '</span>'));
+    });
+    m.appendChild(cbox);
+    var cin = el("div", "kb-cin",
+      '<input type="text" placeholder="დაწერე კომენტარი…" maxlength="1000"><button>დამატება</button>');
+    var cIn = cin.querySelector("input");
+    function addComment() {
+      var txt = cIn.value.trim();
+      if (!txt) return;
+      t.comments = t.comments || [];
+      t.comments.push({ by: "user", text: txt, at: nowISO() });
+      t.updatedAt = nowISO();
+      saveKb(); renderKanban(); openModal(id);
+    }
+    cin.querySelector("button").addEventListener("click", addComment);
+    cIn.addEventListener("keydown", function (ev) { if (ev.key === "Enter") addComment(); });
+    m.appendChild(cin);
+
+    var foot = el("div", "kb-m-foot");
+    if (api && !t.done) {
+      var tCheckBtn = el("button", "kb-btn", icon("search") + "ამ ტასკის შემოწმება");
+      tCheckBtn.title = "AI შეამოწმებს მხოლოდ ამ ტასკს — რა შეიცვალა მის ფოლდერებში/თემაზე";
+      tCheckBtn.addEventListener("click", async function () {
+        tCheckBtn.disabled = true;
+        tCheckBtn.textContent = "მოწმდება…";
+        var ok = await api.taskCheck(t.id);
+        if (!ok) tCheckBtn.textContent = "პროცესი უკვე მიმდინარეობს…";
+      });
+      foot.appendChild(tCheckBtn);
+      var tReplanBtn = el("button", "kb-btn", icon("replan") + "ტასკის გადაგეგმვა");
+      tReplanBtn.title = "AI ამ ტასკს გადაგეგმავს: კონკრეტული ნაბიჯები აღწერაში, საჭიროებისას სტატუსი/დაშლა";
+      tReplanBtn.addEventListener("click", async function () {
+        tReplanBtn.disabled = true;
+        tReplanBtn.textContent = "იგეგმება…";
+        var ok = await api.taskReplan(t.id);
+        if (!ok) tReplanBtn.textContent = "პროცესი უკვე მიმდინარეობს…";
+      });
+      foot.appendChild(tReplanBtn);
+    }
+    var doneBtn = el("button", "kb-btn", t.done ? icon("restore") + "დაბრუნება დაფაზე" : icon("check") + "დასრულების დადასტურება");
+    doneBtn.addEventListener("click", function () {
+      if (t.done) { t.done = false; t.status = "planning"; }
+      else { t.done = true; }
+      t.updatedAt = nowISO();
+      saveKb(); renderKanban(); closeModal();
+    });
+    var delBtn = el("button", "kb-btn ghost", icon("x") + "არქივში");
+    delBtn.addEventListener("click", function () {
+      kb.tasks = kb.tasks.filter(function (x) { return x.id !== t.id; });
+      t.archivedAt = nowISO();
+      kb.archive.push(t);
+      saveKb(); renderKanban(); closeModal();
+    });
+    var permDelBtn = el("button", "kb-btn kb-btn-danger", icon("x") + "წაშლა სამუდამოდ");
+    permDelBtn.addEventListener("click", function () {
+      if (!confirm("ტასკი სამუდამოდ წაიშალოს? არქივში არ შეინახება და ვერ აღდგება.")) return;
+      kb.tasks = kb.tasks.filter(function (x) { return x.id !== t.id; });
+      saveKb(); renderKanban(); closeModal();
+    });
+    var closeBtn = el("button", "kb-btn ghost", "დახურვა");
+    closeBtn.addEventListener("click", closeModal);
+    foot.appendChild(doneBtn);
+    foot.appendChild(delBtn);
+    foot.appendChild(permDelBtn);
+    foot.appendChild(closeBtn);
+    m.appendChild(foot);
+
+    modalOverlay.appendChild(m);
+    modalOverlay.addEventListener("click", function (e) { if (e.target === modalOverlay) closeModal(); });
+    document.body.appendChild(modalOverlay);
+    if (focusDesc) { desc.focus(); }
+  }
+
+  /* Archive page: browse deleted tasks, expand for details, restore. */
+
+  function renderArchivePage() {
+    archiveListEl.innerHTML = "";
+    archiveCountEl.textContent = kb.archive.length
+      ? kb.archive.length + " წაშლილი ტასკი — დააჭირე დეტალებისთვის"
+      : "";
+    if (!kb.archive.length) {
+      archiveListEl.appendChild(el("div", "arch-empty", "არქივი ცარიელია — წაშლილი ტასკები აქ გადმოვა."));
+      return;
+    }
+    kb.archive.slice().reverse().forEach(function (t) {
+      var meta = statusMetaKb(t.status);
+      var card = el("div", "arch-card",
+        '<div class="arch-top">' +
+          '<span class="arch-title">' + md(t.title) + '</span>' +
+          '<span class="arch-meta">წაიშალა ' + md(shortAt(t.archivedAt)) + '</span>' +
+        '</div>' +
+        (t.desc ? '<div class="arch-desc">' + md(t.desc) + '</div>' : '') +
+        '<div class="kb-badges">' +
+          '<span class="kb-chip ' + meta.cls + '">' + meta.label + '</span>' +
+          (t.createdBy === "ai" ? '<span class="kb-chip kb-chip-ai">AI</span>' : '') +
+          ((t.aiNotes || []).length ? '<span class="kb-chip kb-chip-note">' + icon("activity") + t.aiNotes.length + '</span>' : '') +
+          ((t.comments || []).length ? '<span class="kb-chip">' + icon("comment") + t.comments.length + '</span>' : '') +
+        '</div>');
+
+      var details = null;
+      card.addEventListener("click", function (e) {
+        if (e.target.classList.contains("kb-btn")) return;
+        if (details) { details.remove(); details = null; return; }
+        details = el("div", "arch-details");
+        if ((t.aiNotes || []).length) {
+          details.appendChild(el("div", "kb-m-h", "AI — რა შეიცვალა"));
+          var aiBox = el("div", "kb-m-ai");
+          t.aiNotes.slice().reverse().forEach(function (n) {
+            aiBox.appendChild(el("div", null, md(n.text) + ' <span class="at">' + md(shortAt(n.at)) + '</span>'));
+          });
+          details.appendChild(aiBox);
+        }
+        if ((t.comments || []).length) {
+          details.appendChild(el("div", "kb-m-h", "კომენტარები"));
+          var cbox = el("div", "kb-m-comments");
+          t.comments.forEach(function (c) {
+            cbox.appendChild(el("div", "kb-comment",
+              '<span class="by">' + (c.by === "ai" ? "AI" : "შენ") + '</span>' + md(c.text) +
+              ' <span class="at">' + md(shortAt(c.at)) + '</span>'));
+          });
+          details.appendChild(cbox);
+        }
+        var actions = el("div", "arch-actions");
+        var restoreBtn = el("button", "kb-btn", icon("restore") + "დაფაზე აღდგენა");
+        restoreBtn.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          kb.archive = kb.archive.filter(function (x) { return x.id !== t.id; });
+          delete t.archivedAt;
+          t.done = false;
+          t.updatedAt = nowISO();
+          kb.tasks.push(t);
+          saveKb();
+          renderKanban();
+          renderArchivePage();
+        });
+        actions.appendChild(restoreBtn);
+        var permBtn = el("button", "kb-btn kb-btn-danger", icon("x") + "სამუდამოდ წაშლა");
+        permBtn.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          if (!confirm("არქივიდან სამუდამოდ წაიშალოს? ვერ აღდგება.")) return;
+          kb.archive = kb.archive.filter(function (x) { return x.id !== t.id; });
+          saveKb();
+          renderArchivePage();
+        });
+        actions.appendChild(permBtn);
+        details.appendChild(actions);
+        card.appendChild(details);
+      });
+
+      archiveListEl.appendChild(card);
+    });
+  }
+
+  function statusMetaKb(key) {
+    for (var i = 0; i < KB_COLS.length; i++) {
+      if (KB_COLS[i].key === key) return KB_COLS[i];
+    }
+    return KB_COLS[2];
+  }
+
+  var kbCheckBtn = document.getElementById("kb-check");
+  var kbReplanBtn = document.getElementById("kb-replan");
+
+  if (api) {
+    kbCheckBtn.addEventListener("click", async function () {
+      kbCheckBtn.disabled = true;
+      kbCheckBtn.textContent = "მოწმდება… (1-2 წთ)";
+      var ok = await api.kanbanCheck();
+      if (!ok) kbCheckBtn.textContent = "პროცესი უკვე მიმდინარეობს…";
+    });
+    kbReplanBtn.addEventListener("click", async function () {
+      if (!confirm("AI სამომავლო გეგმას გადააწყობს დაფის ტასკებისა და სტატუსების მიხედვით. ამას რამდენიმე წუთი სჭირდება. გავაგრძელო?")) return;
+      kbReplanBtn.disabled = true;
+      kbReplanBtn.textContent = "იგეგმება…";
+      var ok = await api.replan();
+      if (!ok) kbReplanBtn.textContent = "პროცესი უკვე მიმდინარეობს…";
+    });
+  } else {
+    kbCheckBtn.disabled = true;
+    kbReplanBtn.disabled = true;
+    kbCheckBtn.title = kbReplanBtn.title = "მხოლოდ დესკტოპ-აპშია ხელმისაწვდომი";
+  }
+
+  kanbanStore.load().then(function (data) {
+    kb = data && Array.isArray(data.tasks) ? { tasks: data.tasks, archive: data.archive || [] } : { tasks: [], archive: [] };
+    renderKanban();
+  });
+
+  /* ---- view switching ---- */
+
+  /* ---- analytics page ---- */
+
+  var anLoaded = false;
+
+  function shortProject(p) {
+    var parts = String(p || "").split("\\").filter(Boolean);
+    return parts.slice(-2).join("\\") || p;
+  }
+
+  function anBarRows(container, rows, maxRows) {
+    container.innerHTML = "";
+    if (!rows.length) {
+      container.appendChild(el("div", "an-empty", "მონაცემები ჯერ არ არის."));
+      return;
+    }
+    var max = rows[0].value || 1;
+    rows.slice(0, maxRows || 8).forEach(function (r) {
+      var row = el("div", "an-row",
+        '<span class="an-name" title="' + md(r.full || r.name) + '">' + md(r.name) + '</span>' +
+        '<span class="an-track"><span class="an-fill" style="width:' + Math.max(2, r.value / max * 100).toFixed(1) + '%"></span></span>' +
+        '<span class="an-val">' + Math.round(r.value) + '</span>');
+      row.title = (r.full || r.name) + " — " + Math.round(r.value);
+      container.appendChild(row);
+    });
+  }
+
+  function anColumns(container, cols) {
+    container.innerHTML = "";
+    var wrap = el("div", "an-cols");
+    var labels = el("div", "an-col-labels");
+    var max = 1;
+    cols.forEach(function (c) { if (c.value > max) max = c.value; });
+    var any = cols.some(function (c) { return c.value > 0; });
+    if (!any) {
+      container.appendChild(el("div", "an-empty", "მონაცემები გროვდება — მონიტორი ყოველ 30 წუთში იწერს ცვლილებებს."));
+      return;
+    }
+    cols.forEach(function (c) {
+      var col = el("div", "an-col" + (c.value === 0 ? " dim" : ""));
+      var fill = el("div", "an-col-fill");
+      fill.style.height = c.value === 0 ? "2px" : Math.max(4, c.value / max * 100).toFixed(1) + "%";
+      col.title = c.tip + " — " + c.value;
+      col.appendChild(fill);
+      wrap.appendChild(col);
+      labels.appendChild(el("span", "an-col-label", c.label || ""));
+    });
+    container.appendChild(wrap);
+    container.appendChild(labels);
+  }
+
+  async function loadAnalytics() {
+    if (!api || !api.analyticsData) return;
+    var data;
+    try { data = await api.analyticsData(); } catch (e) { return; }
+    var events = data.events || [], daily = data.daily || [], days = data.days || [];
+
+    /* tiles */
+    var projScore = {};
+    daily.forEach(function (d) { projScore[d.project] = (projScore[d.project] || 0) + d.score; });
+    events.forEach(function (e) { projScore[e.project] = (projScore[e.project] || 0) + 1; });
+    var topProj = Object.keys(projScore).sort(function (a, b) { return projScore[b] - projScore[a]; })[0];
+    var hourCount = {};
+    events.forEach(function (e) {
+      var h = parseInt(String(e.ts || "").slice(11, 13), 10);
+      if (!isNaN(h)) hourCount[h] = (hourCount[h] || 0) + 1;
+    });
+    var peakHour = Object.keys(hourCount).sort(function (a, b) { return hourCount[b] - hourCount[a]; })[0];
+    var activeDays = {};
+    daily.forEach(function (d) { activeDays[d.date] = true; });
+    events.forEach(function (e) { activeDays[String(e.ts || "").slice(0, 10)] = true; });
+
+    var tilesEl = document.getElementById("an-tiles");
+    tilesEl.innerHTML = "";
+    [
+      { v: events.length ? String(events.length) : "—", k: "ფაილის ცვლილება კვირაში" },
+      { v: topProj ? shortProject(topProj) : "—", k: "ყველაზე აქტიური პროექტი" },
+      { v: peakHour !== undefined && peakHour !== null && events.length ? peakHour + ":00" : "—", k: "პიკური საათი" },
+      { v: String(Object.keys(activeDays).length), k: "აქტიური დღე 7-დან" }
+    ].forEach(function (t) {
+      tilesEl.appendChild(el("div", "an-tile", '<div class="v">' + md(t.v) + '</div><div class="k">' + md(t.k) + '</div>'));
+    });
+
+    /* projects: weekly score (snapshots) + events */
+    var projRows = Object.keys(projScore).map(function (p) {
+      return { name: shortProject(p), full: p, value: projScore[p] };
+    }).sort(function (a, b) { return b.value - a.value; });
+    anBarRows(document.getElementById("an-projects"), projRows, 8);
+
+    /* active hours: 24 columns from monitor events */
+    var hourCols = [];
+    for (var h = 0; h < 24; h++) {
+      hourCols.push({ value: hourCount[h] || 0, label: h % 3 === 0 ? String(h) : "", tip: h + ":00" });
+    }
+    anColumns(document.getElementById("an-hours"), hourCols);
+
+    /* day load: 7 columns — snapshot score sum, plus event count fallback */
+    var dayScore = {};
+    daily.forEach(function (d) { dayScore[d.date] = (dayScore[d.date] || 0) + d.score; });
+    events.forEach(function (e) {
+      var d = String(e.ts || "").slice(0, 10);
+      dayScore[d] = (dayScore[d] || 0) + 1;
+    });
+    var weekdays = ["კვ", "ორ", "სამ", "ოთხ", "ხუთ", "პარ", "შაბ"];
+    var dayCols = days.map(function (d) {
+      var wd = "";
+      try { wd = weekdays[new Date(d + "T00:00:00").getDay()]; } catch (e) {}
+      return { value: Math.round(dayScore[d] || 0), label: wd + " " + d.slice(8), tip: d };
+    });
+    anColumns(document.getElementById("an-days"), dayCols);
+
+    /* frequently changed files */
+    var fileCount = {};
+    events.forEach(function (e) {
+      var key = e.project + "|" + e.file;
+      fileCount[key] = (fileCount[key] || 0) + 1;
+    });
+    var filesEl = document.getElementById("an-files");
+    filesEl.innerHTML = "";
+    var fileRows = Object.keys(fileCount).sort(function (a, b) { return fileCount[b] - fileCount[a]; }).slice(0, 12);
+    if (!fileRows.length) {
+      filesEl.appendChild(el("div", "an-empty", "მონაცემები გროვდება — პირველი ჩანაწერები მონიტორის მომდევნო გაშვებისას გამოჩნდება (~30 წთ)."));
+    } else {
+      fileRows.forEach(function (key) {
+        var parts = key.split("|");
+        filesEl.appendChild(el("div", "an-file-row",
+          '<span class="an-file-name" title="' + md(key.replace("|", "\\")) + '">' + md(parts[1]) +
+            '<span class="an-file-proj">' + md(shortProject(parts[0])) + '</span></span>' +
+          '<span class="an-file-count">' + fileCount[key] + '×</span>'));
+      });
+    }
+    anLoaded = true;
+  }
+
+  /* ---- AI usage & processes page ---- */
+
+  var aiCurTimer = null;
+
+  function modeLabel(mode) {
+    return AI_LABELS[mode] ? AI_LABELS[mode].replace("…", "") : "AI პროცესი";
+  }
+
+  var aiCtxBtn = document.getElementById("ai-context-btn");
+  if (aiCtxBtn) {
+    aiCtxBtn.addEventListener("click", function () {
+      if (api && api.aiOpenContext) api.aiOpenContext();
+    });
+  }
+
+  async function renderAiPage() {
+    if (!api || !api.aiRuns) return;
+    var curEl = document.getElementById("ai-current");
+    var state = null;
+    try { state = await api.aiStatus(); } catch (e) {}
+    if (aiCurTimer) { clearInterval(aiCurTimer); aiCurTimer = null; }
+    curEl.innerHTML = "";
+    if (state && state.running) {
+      var row = el("div", "ai-cur");
+      var label = el("span", "ai-cur-label");
+      var estLine = state.est ? estText(state.est, state.startedAt) : "";
+      function paintCur() {
+        var s = Math.floor((Date.now() - state.startedAt) / 1000);
+        label.textContent = modeLabel(state.mode) + " · " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") +
+          (estLine ? " · " + estLine : "");
+      }
+      paintCur();
+      aiCurTimer = setInterval(paintCur, 1000);
+      var killBtn = el("button", "ai-kill-btn", icon("x") + "პროცესის გათიშვა");
+      killBtn.addEventListener("click", async function () {
+        if (!confirm("გავთიშო მიმდინარე AI პროცესი? გაშვება ისტორიაში დაფიქსირდება სტატუსით: გათიშული.")) return;
+        killBtn.disabled = true;
+        killBtn.textContent = "ითიშება…";
+        await api.aiKill();
+      });
+      row.appendChild(label);
+      row.appendChild(killBtn);
+      curEl.appendChild(row);
+    } else {
+      curEl.appendChild(el("div", "an-empty", "AI პროცესი ამჟამად არ მიმდინარეობს."));
+    }
+
+    var runs = [];
+    try { runs = await api.aiRuns(); } catch (e) {}
+    var weekAgo = Date.now() - 7 * 86400000;
+    var weekRuns = runs.filter(function (r) { return new Date(r.start).getTime() > weekAgo; });
+    var totalCost = 0, totalIn = 0, totalOut = 0;
+    weekRuns.forEach(function (r) {
+      totalCost += r.costUsd || 0;
+      totalIn += r.inputTokens || 0;
+      totalOut += r.outputTokens || 0;
+    });
+    var tilesEl = document.getElementById("ai-tiles");
+    tilesEl.innerHTML = "";
+    [
+      { v: String(weekRuns.length), k: "გაშვება ბოლო 7 დღეში" },
+      { v: "$" + totalCost.toFixed(2), k: "ღირებულება 7 დღეში" },
+      { v: totalIn.toLocaleString(), k: "input ტოკენი" },
+      { v: totalOut.toLocaleString(), k: "output ტოკენი" }
+    ].forEach(function (t) {
+      tilesEl.appendChild(el("div", "an-tile", '<div class="v">' + md(t.v) + '</div><div class="k">' + md(t.k) + '</div>'));
+    });
+
+    var runsEl = document.getElementById("ai-runs");
+    runsEl.innerHTML = "";
+    if (!runs.length) {
+      runsEl.appendChild(el("div", "an-empty", "ჯერ არცერთი გაშვება არ დაფიქსირებულა — ჟურნალი ახალი გაშვებებიდან შეივსება."));
+      return;
+    }
+    runs.slice(0, 40).forEach(function (r) {
+      var when = String(r.start || "").slice(5, 16).replace("T", " ");
+      var dur = Math.floor((r.durationSec || 0) / 60) + ":" + String((r.durationSec || 0) % 60).padStart(2, "0");
+      var tok = (r.inputTokens || r.outputTokens)
+        ? (r.inputTokens || 0).toLocaleString() + " / " + (r.outputTokens || 0).toLocaleString()
+        : "—";
+      var cost = r.costUsd ? "$" + r.costUsd.toFixed(3) : "—";
+      runsEl.appendChild(el("div", "ai-run-row",
+        '<span class="c">' + md(when) + '</span>' +
+        '<span>' + md(modeLabel(r.mode)) + '</span>' +
+        '<span class="c">' + md(dur) + '</span>' +
+        '<span class="c" title="input / output ტოკენები">' + md(tok) + ' · ' + md(cost) + '</span>' +
+        '<span class="ai-run-status-' + (r.status === "killed" ? "killed" : "ok") + '">' +
+          (r.status === "killed" ? "გათიშული" : "OK") + '</span>'));
+    });
+  }
+
+  /* App-wide folder drop: dropping a folder anywhere creates a task for it. */
+  document.addEventListener("dragover", function (e) { e.preventDefault(); });
+  document.addEventListener("drop", async function (e) {
+    e.preventDefault();
+    if (!api || !api.getPathForFile) return;
+    // Kanban columns have their own drop handler (status-aware).
+    if (e.target && e.target.closest && e.target.closest(".kb-col")) return;
+    if (!e.dataTransfer.files || !e.dataTransfer.files.length) return;
+    var p = api.getPathForFile(e.dataTransfer.files[0]);
+    if (!p) return;
+    var info = await api.dirInfo(p);
+    if (!info) return;
+    // Never create silently — the user confirms first.
+    if (!confirm("შეიქმნას ტასკი ფოლდერისთვის: " + info.name + "?")) return;
+    var nt = {
+      id: newTaskId(), title: info.name, desc: "", status: "planning", done: false,
+      createdBy: "user", createdAt: nowISO(), updatedAt: nowISO(),
+      comments: [], aiNotes: [], dirs: [info.dir], subtasks: []
+    };
+    kb.tasks.push(nt);
+    saveKb(); renderKanban();
+    if (api.scanFolder) api.scanFolder(nt.id, info.dir);
+    showView("kanban");
+    openModal(nt.id, true);
+  });
+
+  /* ---- view switching ---- */
+
+  var navButtons = {
+    brief: document.getElementById("nav-brief"),
+    kanban: document.getElementById("nav-kanban"),
+    archive: document.getElementById("nav-archive"),
+    analytics: document.getElementById("nav-analytics"),
+    ai: document.getElementById("nav-ai")
+  };
+  var kanbanView = document.getElementById("kanban-view");
+  var views = {
+    brief: content,
+    kanban: kanbanView,
+    archive: document.getElementById("archive-view"),
+    analytics: document.getElementById("analytics-view"),
+    ai: document.getElementById("ai-view")
+  };
+  var historyHead = document.getElementById("history-head");
+
+  function showView(name) {
+    Object.keys(views).forEach(function (k) {
+      views[k].hidden = k !== name;
+      navButtons[k].classList.toggle("active", k === name);
+    });
+    // The day history belongs to the briefing view only.
+    historyHead.hidden = name !== "brief";
+    dayList.hidden = name !== "brief";
+    closeModal();
+    // Remember the view: the page reloads after every AI/pipeline run and
+    // must come back to the same place, not jump to the briefing.
+    try { localStorage.setItem("dailybrief-view", name); } catch (e) {}
+    if (name === "archive") renderArchivePage();
+    if (name === "analytics") loadAnalytics();
+    if (name === "ai") renderAiPage();
+  }
+  Object.keys(navButtons).forEach(function (k) {
+    navButtons[k].addEventListener("click", function () { showView(k); });
+  });
+
+  /* ---- bottom AI-activity popup ---- */
+
+  var AI_EXPECTED = { full: 900, replan: 300, check: 120, "task-replan": 150 }; // seconds, rough
+  var AI_LABELS = {
+    full: "AI ადგენს დღის ბრიფინგს…",
+    replan: "AI გეგმავს დღეს თავიდან…",
+    check: "AI ამოწმებს ტასკებს…",
+    "task-replan": "AI გეგმავს ტასკს თავიდან…"
+  };
+  var aiPopup = el("div", "ai-popup",
+    '<div class="ai-popup-row">' +
+      '<span class="ai-popup-label"></span>' +
+      '<span class="ai-popup-time"></span>' +
+    '</div>' +
+    '<div class="ai-bar"><div class="ai-bar-fill"></div></div>' +
+    '<div class="ai-popup-est"></div>');
+  aiPopup.hidden = true;
+  document.body.appendChild(aiPopup);
+  var aiLabelEl = aiPopup.querySelector(".ai-popup-label");
+  var aiTimeEl = aiPopup.querySelector(".ai-popup-time");
+  var aiFillEl = aiPopup.querySelector(".ai-bar-fill");
+  var aiEstEl = aiPopup.querySelector(".ai-popup-est");
+
+  function fmtTok(n) {
+    n = n || 0;
+    return n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(n);
+  }
+
+  function fmtDur(sec) {
+    sec = Math.max(0, Math.round(sec || 0));
+    return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
+  }
+
+  function estText(est, startedAt) {
+    if (!est) return "";
+    var eta = "";
+    if (est.durationSec) {
+      var remain = startedAt ? est.durationSec - (Date.now() - startedAt) / 1000 : est.durationSec;
+      eta = " · ETA ~" + fmtDur(Math.max(5, remain));
+    }
+    return "სავარაუდო: ~" + fmtTok(est.inputTokens) + " in / ~" + fmtTok(est.outputTokens) +
+      " out · ~$" + (est.costUsd || 0).toFixed(2) + eta +
+      (est.source === "history" ? " (ისტორიით)" : " (საწყისი)");
+  }
+  var aiTimer = null;
+  var aiCurrent = null;
+
+  function aiTick() {
+    if (!aiCurrent) return;
+    var elapsed = Math.max(0, (Date.now() - aiCurrent.startedAt) / 1000);
+    var expected = (aiCurrent.est && aiCurrent.est.durationSec) || AI_EXPECTED[aiCurrent.mode] || 300;
+    // Cap at 95% — the run finishes when the page reloads, never fake 100%.
+    var pct = Math.min(95, elapsed / expected * 100);
+    aiFillEl.style.width = pct.toFixed(1) + "%";
+    var mm = Math.floor(elapsed / 60), ss = Math.floor(elapsed % 60);
+    aiTimeEl.textContent = mm + ":" + (ss < 10 ? "0" : "") + ss;
+    aiEstEl.textContent = estText(aiCurrent.est, aiCurrent.startedAt);
+  }
+
+  function showAiStatus(state) {
+    if (aiTimer) { clearInterval(aiTimer); aiTimer = null; }
+    if (!state || !state.running) {
+      aiCurrent = null;
+      aiPopup.hidden = true;
+    } else {
+      aiCurrent = state;
+      aiLabelEl.textContent = AI_LABELS[state.mode] || "AI მუშაობს…";
+      aiEstEl.textContent = estText(state.est, state.startedAt);
+      aiPopup.hidden = false;
+      aiTick();
+      aiTimer = setInterval(aiTick, 1000);
+    }
+    // Keep the AI page in sync when a run starts or ends while it's open.
+    if (typeof views !== "undefined" && views.ai && !views.ai.hidden) renderAiPage();
+  }
+
+  if (api && api.aiStatus) {
+    // Older main process may lack the handler (mixed dev/build run) — never fatal.
+    api.aiStatus().then(showAiStatus).catch(function () {});
+    try { api.onAiStatus(showAiStatus); } catch (e) {}
+  }
+
+  /* ---- bootstrap ---- */
+
+  if (api) {
+    initElectron();
+    // Restore the last open view after reloads (AI runs reload the page).
+    try {
+      var savedView = localStorage.getItem("dailybrief-view");
+      if (savedView && savedView !== "brief" && views[savedView]) showView(savedView);
+    } catch (e) {}
+  } else {
+    document.body.classList.add("web");
+    renderBrief(BRIEF, {});
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+# dependencies & build output
+node_modules/
+output/
+
+# personal data — never publish
+core/briefings/
+core/briefs/
+core/snapshots/
+core/analytics/
+core/scans/
+core/done/
+core/kanban.json
+core/plans.json
+core/GOALS.md
+core/STATE.md
+core/PROGRESS.md
+core/dirs.txt
+core/top-dirs.txt
+core/check-digest.json
+core/check-patch.json
+core/ai-runs.jsonl
+core/last-ai-context.txt
+core/dailybrief.db
+core/dailybrief.db-shm
+core/dailybrief.db-wal
+*.log
