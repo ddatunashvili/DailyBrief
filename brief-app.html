@@ -261,7 +261,9 @@
   .ai-run-row .c { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .ai-run-status-ok { color: var(--ok); font-size: 0.72rem; font-weight: 700; }
   .ai-run-status-killed { color: var(--crit); font-size: 0.72rem; font-weight: 700; }
-  .ai-cur { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .ai-run-status-skipped { color: var(--muted); font-size: 0.72rem; font-weight: 700; }
+  .ai-cur { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; padding: 0.4rem 0; }
+  .ai-cur + .ai-cur { border-top: 1px solid var(--border); }
   .ai-cur-label { font-weight: 600; font-size: 0.92rem; }
   .ai-kill-btn {
     background: var(--crit-soft); border: 1px solid var(--crit); color: var(--crit);
@@ -463,6 +465,8 @@
   .ai-bar { height: 6px; background: var(--track); border-radius: 3px; overflow: hidden; }
   .ai-bar-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 3px; transition: width 0.9s linear; }
   .ai-popup-est { margin-top: 0.45rem; font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ai-popup-row-wrap + .ai-popup-row-wrap { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--border); }
+  .ai-popup-more { margin-top: 0.4rem; font-size: 0.7rem; color: var(--muted); }
 
   .kb-archive { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
   .kb-archive-item { font-size: 0.82rem; color: var(--muted); padding: 0.25rem 0; }
@@ -491,6 +495,7 @@
         <div class="kb-actions">
           <button class="kb-btn" id="kb-check" title="AI შეამოწმებს რა შეიცვალა დირექტორიებში და თითო ტასკს მიუწერს ცვლილებებს">მიმდინარეს შემოწმება</button>
           <button class="kb-btn" id="kb-replan" title="AI სამომავლო გეგმას გადააწყობს შესრულებული/შექმნილი ტასკებისა და სტატუსების მიხედვით">სამომავლო გადაგეგმვა</button>
+          <button class="kb-btn" id="kb-generate" title="AI შემოგთავაზებს ახალ ტასკებს საერთო მიმართულების მიხედვით (GOALS/STATE/PROGRESS) — არა ბოლო აქტივობით">ტასკების გენერაცია</button>
         </div>
       </div>
       <div class="board" id="board"></div>
@@ -1126,6 +1131,16 @@ const BRIEF = {
         if (!ok) tReplanBtn.textContent = "პროცესი უკვე მიმდინარეობს…";
       });
       foot.appendChild(tReplanBtn);
+      // A check/replan for this exact task may already be running (several
+      // can run at once) — reflect that instead of letting the user queue a
+      // second one that will just be rejected.
+      var runningForTask = aiRunsState.filter(function (r) { return r.taskId === t.id; });
+      if (runningForTask.length) {
+        tCheckBtn.disabled = true;
+        tReplanBtn.disabled = true;
+        var busyLabel = modeLabel(runningForTask[0].mode) + " მიმდინარეობს…";
+        tCheckBtn.textContent = tReplanBtn.textContent = busyLabel;
+      }
     }
     var doneBtn = el("button", "kb-btn", t.done ? icon("restore") + "დაბრუნება დაფაზე" : icon("check") + "დასრულების დადასტურება");
     doneBtn.addEventListener("click", function () {
@@ -1250,25 +1265,33 @@ const BRIEF = {
 
   var kbCheckBtn = document.getElementById("kb-check");
   var kbReplanBtn = document.getElementById("kb-replan");
+  var kbGenerateBtn = document.getElementById("kb-generate");
 
   if (api) {
     kbCheckBtn.addEventListener("click", async function () {
       kbCheckBtn.disabled = true;
       kbCheckBtn.textContent = "მოწმდება… (1-2 წთ)";
       var ok = await api.kanbanCheck();
-      if (!ok) kbCheckBtn.textContent = "პროცესი უკვე მიმდინარეობს…";
+      if (!ok) kbCheckBtn.textContent = "ბევრი პროცესია გაშვებული…";
     });
     kbReplanBtn.addEventListener("click", async function () {
       if (!confirm("AI სამომავლო გეგმას გადააწყობს დაფის ტასკებისა და სტატუსების მიხედვით. ამას რამდენიმე წუთი სჭირდება. გავაგრძელო?")) return;
       kbReplanBtn.disabled = true;
       kbReplanBtn.textContent = "იგეგმება…";
       var ok = await api.replan();
-      if (!ok) kbReplanBtn.textContent = "პროცესი უკვე მიმდინარეობს…";
+      if (!ok) kbReplanBtn.textContent = "სხვა AI პროცესია გაშვებული…";
+    });
+    kbGenerateBtn.addEventListener("click", async function () {
+      kbGenerateBtn.disabled = true;
+      kbGenerateBtn.textContent = "გენერირდება…";
+      var ok = api.kanbanGenerate ? await api.kanbanGenerate() : false;
+      if (!ok) kbGenerateBtn.textContent = "ბევრი პროცესია გაშვებული…";
     });
   } else {
     kbCheckBtn.disabled = true;
     kbReplanBtn.disabled = true;
-    kbCheckBtn.title = kbReplanBtn.title = "მხოლოდ დესკტოპ-აპშია ხელმისაწვდომი";
+    kbGenerateBtn.disabled = true;
+    kbCheckBtn.title = kbReplanBtn.title = kbGenerateBtn.title = "მხოლოდ დესკტოპ-აპშია ხელმისაწვდომი";
   }
 
   kanbanStore.load().then(function (data) {
@@ -1429,31 +1452,38 @@ const BRIEF = {
   async function renderAiPage() {
     if (!api || !api.aiRuns) return;
     var curEl = document.getElementById("ai-current");
-    var state = null;
-    try { state = await api.aiStatus(); } catch (e) {}
+    var runs = [];
+    try { runs = await api.aiStatus(); } catch (e) {}
+    if (!Array.isArray(runs)) runs = [];
     if (aiCurTimer) { clearInterval(aiCurTimer); aiCurTimer = null; }
     curEl.innerHTML = "";
-    if (state && state.running) {
-      var row = el("div", "ai-cur");
-      var label = el("span", "ai-cur-label");
-      var estLine = state.est ? estText(state.est, state.startedAt) : "";
+    if (runs.length) {
+      var labels = {};
+      runs.forEach(function (r) {
+        var row = el("div", "ai-cur");
+        var label = el("span", "ai-cur-label");
+        labels[r.id] = label;
+        row.appendChild(label);
+        var killBtn = el("button", "ai-kill-btn", icon("x") + "პროცესის გათიშვა");
+        killBtn.addEventListener("click", async function () {
+          if (!confirm("გავთიშო ეს AI პროცესი? გაშვება ისტორიაში დაფიქსირდება სტატუსით: გათიშული.")) return;
+          killBtn.disabled = true;
+          killBtn.textContent = "ითიშება…";
+          await api.aiKill(r.id);
+        });
+        row.appendChild(killBtn);
+        curEl.appendChild(row);
+      });
       function paintCur() {
-        var s = Math.floor((Date.now() - state.startedAt) / 1000);
-        label.textContent = modeLabel(state.mode) + " · " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") +
-          (estLine ? " · " + estLine : "");
+        runs.forEach(function (r) {
+          var s = Math.floor((Date.now() - r.startedAt) / 1000);
+          var estLine = r.est ? estText(r.est, r.startedAt) : "";
+          labels[r.id].textContent = modeLabel(r.mode) + (r.taskId ? " (" + r.taskId + ")" : "") + " · " +
+            Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") + (estLine ? " · " + estLine : "");
+        });
       }
       paintCur();
       aiCurTimer = setInterval(paintCur, 1000);
-      var killBtn = el("button", "ai-kill-btn", icon("x") + "პროცესის გათიშვა");
-      killBtn.addEventListener("click", async function () {
-        if (!confirm("გავთიშო მიმდინარე AI პროცესი? გაშვება ისტორიაში დაფიქსირდება სტატუსით: გათიშული.")) return;
-        killBtn.disabled = true;
-        killBtn.textContent = "ითიშება…";
-        await api.aiKill();
-      });
-      row.appendChild(label);
-      row.appendChild(killBtn);
-      curEl.appendChild(row);
     } else {
       curEl.appendChild(el("div", "an-empty", "AI პროცესი ამჟამად არ მიმდინარეობს."));
     }
@@ -1492,13 +1522,14 @@ const BRIEF = {
         ? (r.inputTokens || 0).toLocaleString() + " / " + (r.outputTokens || 0).toLocaleString()
         : "—";
       var cost = r.costUsd ? "$" + r.costUsd.toFixed(3) : "—";
+      var statusCls = r.status === "killed" ? "killed" : (r.status === "skipped" ? "skipped" : "ok");
+      var statusLabel = r.status === "killed" ? "გათიშული" : (r.status === "skipped" ? "გამოტოვებული" : "OK");
       runsEl.appendChild(el("div", "ai-run-row",
         '<span class="c">' + md(when) + '</span>' +
         '<span>' + md(modeLabel(r.mode)) + '</span>' +
         '<span class="c">' + md(dur) + '</span>' +
         '<span class="c" title="input / output ტოკენები">' + md(tok) + ' · ' + md(cost) + '</span>' +
-        '<span class="ai-run-status-' + (r.status === "killed" ? "killed" : "ok") + '">' +
-          (r.status === "killed" ? "გათიშული" : "OK") + '</span>'));
+        '<span class="ai-run-status-' + statusCls + '">' + statusLabel + '</span>'));
     });
   }
 
@@ -1569,26 +1600,17 @@ const BRIEF = {
 
   /* ---- bottom AI-activity popup ---- */
 
-  var AI_EXPECTED = { full: 900, replan: 300, check: 120, "task-replan": 150 }; // seconds, rough
+  var AI_EXPECTED = { full: 900, replan: 300, check: 120, "task-replan": 150, "task-generate": 120 }; // seconds, rough
   var AI_LABELS = {
     full: "AI ადგენს დღის ბრიფინგს…",
     replan: "AI გეგმავს დღეს თავიდან…",
     check: "AI ამოწმებს ტასკებს…",
-    "task-replan": "AI გეგმავს ტასკს თავიდან…"
+    "task-replan": "AI გეგმავს ტასკს თავიდან…",
+    "task-generate": "AI ეძებს ახალ მიმართულებებს…"
   };
-  var aiPopup = el("div", "ai-popup",
-    '<div class="ai-popup-row">' +
-      '<span class="ai-popup-label"></span>' +
-      '<span class="ai-popup-time"></span>' +
-    '</div>' +
-    '<div class="ai-bar"><div class="ai-bar-fill"></div></div>' +
-    '<div class="ai-popup-est"></div>');
+  var aiPopup = el("div", "ai-popup");
   aiPopup.hidden = true;
   document.body.appendChild(aiPopup);
-  var aiLabelEl = aiPopup.querySelector(".ai-popup-label");
-  var aiTimeEl = aiPopup.querySelector(".ai-popup-time");
-  var aiFillEl = aiPopup.querySelector(".ai-bar-fill");
-  var aiEstEl = aiPopup.querySelector(".ai-popup-est");
 
   function fmtTok(n) {
     n = n || 0;
@@ -1612,29 +1634,39 @@ const BRIEF = {
       (est.source === "history" ? " (ისტორიით)" : " (საწყისი)");
   }
   var aiTimer = null;
-  var aiCurrent = null;
+  // Live cache of active runs, pushed from main on every start/stop — also
+  // used by the task modal to pre-disable buttons for a task already checking.
+  var aiRunsState = [];
 
-  function aiTick() {
-    if (!aiCurrent) return;
-    var elapsed = Math.max(0, (Date.now() - aiCurrent.startedAt) / 1000);
-    var expected = (aiCurrent.est && aiCurrent.est.durationSec) || AI_EXPECTED[aiCurrent.mode] || 300;
+  function aiPopupRow(r) {
+    var elapsed = Math.max(0, (Date.now() - r.startedAt) / 1000);
+    var expected = (r.est && r.est.durationSec) || AI_EXPECTED[r.mode] || 300;
     // Cap at 95% — the run finishes when the page reloads, never fake 100%.
     var pct = Math.min(95, elapsed / expected * 100);
-    aiFillEl.style.width = pct.toFixed(1) + "%";
     var mm = Math.floor(elapsed / 60), ss = Math.floor(elapsed % 60);
-    aiTimeEl.textContent = mm + ":" + (ss < 10 ? "0" : "") + ss;
-    aiEstEl.textContent = estText(aiCurrent.est, aiCurrent.startedAt);
+    return el("div", "ai-popup-row-wrap",
+      '<div class="ai-popup-row">' +
+        '<span class="ai-popup-label">' + md(AI_LABELS[r.mode] || "AI მუშაობს…") + '</span>' +
+        '<span class="ai-popup-time">' + mm + ":" + (ss < 10 ? "0" : "") + ss + '</span>' +
+      '</div>' +
+      '<div class="ai-bar"><div class="ai-bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>' +
+      '<div class="ai-popup-est">' + md(estText(r.est, r.startedAt)) + '</div>');
   }
 
-  function showAiStatus(state) {
+  function aiTick() {
+    aiPopup.innerHTML = "";
+    aiRunsState.slice(0, 3).forEach(function (r) { aiPopup.appendChild(aiPopupRow(r)); });
+    if (aiRunsState.length > 3) {
+      aiPopup.appendChild(el("div", "ai-popup-more", "+" + (aiRunsState.length - 3) + " კიდევ მიმდინარეობს"));
+    }
+  }
+
+  function showAiStatus(runs) {
+    aiRunsState = Array.isArray(runs) ? runs : [];
     if (aiTimer) { clearInterval(aiTimer); aiTimer = null; }
-    if (!state || !state.running) {
-      aiCurrent = null;
+    if (!aiRunsState.length) {
       aiPopup.hidden = true;
     } else {
-      aiCurrent = state;
-      aiLabelEl.textContent = AI_LABELS[state.mode] || "AI მუშაობს…";
-      aiEstEl.textContent = estText(state.est, state.startedAt);
       aiPopup.hidden = false;
       aiTick();
       aiTimer = setInterval(aiTick, 1000);

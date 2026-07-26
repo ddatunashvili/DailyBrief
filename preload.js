@@ -26,7 +26,8 @@ contextBridge.exposeInMainWorld('dailybrief', {
     try { return webUtils.getPathForFile(file); } catch (e) { return null; }
   },
   aiRuns: () => ipcRenderer.invoke('ai:runs'),
-  aiKill: () => ipcRenderer.invoke('ai:kill'),
+  aiKill: (runId) => ipcRenderer.invoke('ai:kill', runId),
   aiOpenContext: () => ipcRenderer.invoke('ai:openContext'),
-  scanFolder: (taskId, dir) => ipcRenderer.invoke('task:scan', taskId, dir)
+  scanFolder: (taskId, dir) => ipcRenderer.invoke('task:scan', taskId, dir),
+  kanbanGenerate: () => ipcRenderer.invoke('kanban:generate')
 });

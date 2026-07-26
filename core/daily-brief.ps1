@@ -7,6 +7,12 @@ param(
     [switch]$Force
 )
 
+# Force real UTF-8 as early as possible, before anything else runs, so no
+# child process in the claude.cmd -> node chain can inherit a stale codepage.
+& chcp 65001 > $null
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$OutputEncoding = [Text.Encoding]::UTF8
+
 $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
@@ -32,7 +38,6 @@ if (Test-Path $brief) {
     }
 }
 
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
 # Replan uses a slim prompt: no snapshots, no history, fewer files, fewer turns.
 $promptFile = if ($Force) { 'prompt-replan.md' } else { 'prompt.md' }
 $prompt = (Get-Content (Join-Path $base $promptFile) -Raw -Encoding UTF8).Replace('{{TODAY}}', $today)
@@ -83,7 +88,6 @@ $maxTurns = if ($Force) { '12' } else { '22' }
 # the prompt files strictly limit what may be written.
 # Prompt goes via stdin: it contains quotes that PS 5.1 mangles as an argument,
 # which silently breaks every flag after it.
-$OutputEncoding = [Text.Encoding]::UTF8
 # sonnet for the daily brief and replans: language quality matters here.
 # The mechanical flows (checks, publish) stay on haiku - cheapest/fastest.
 $claudeArgs = @(

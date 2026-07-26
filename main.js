@@ -14,6 +14,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 // The packaged exe runs from output\win-unpacked, but the live project
 // (page, core, pipeline) stays at the project root so Claude's daily
@@ -67,10 +68,57 @@ function listDates(dir, ext) {
   }
 }
 
+// Repairs Georgian text corrupted by an earlier, less-hardened version of the
+// PS scripts (UTF-8 bytes misread as Latin-1, then re-saved as UTF-8). Only
+// accepts the fix when reinterpreting as Latin-1 -> UTF-8 is itself valid
+// UTF-8 AND yields Georgian-block characters the original didn't have —
+// this makes it a no-op on ordinary ASCII/English/already-correct text.
+function fixMojibake(s) {
+  if (typeof s !== 'string' || s.length < 2 || !/[À-ÿ]/.test(s)) return s;
+  try {
+    const fixed = Buffer.from(s, 'latin1').toString('utf8');
+    if (fixed !== s && fixed.indexOf('�') === -1 &&
+        /[Ⴀ-ჿ]/.test(fixed) && !/[Ⴀ-ჿ]/.test(s)) {
+      return fixed;
+    }
+  } catch (e) { /* not repairable, leave as-is */ }
+  return s;
+}
+
+// Walks objects/arrays and repairs every string leaf. Returns the SAME
+// reference when nothing changed, so callers can cheaply detect "was this
+// touched" via `fixed !== original` and only write back when needed.
+function deepFixMojibake(value) {
+  if (typeof value === 'string') return fixMojibake(value);
+  if (Array.isArray(value)) {
+    let changed = false;
+    const out = value.map((v) => { const f = deepFixMojibake(v); if (f !== v) changed = true; return f; });
+    return changed ? out : value;
+  }
+  if (value && typeof value === 'object') {
+    let changed = false;
+    const out = {};
+    for (const k of Object.keys(value)) {
+      const fv = deepFixMojibake(value[k]);
+      if (fv !== value[k]) changed = true;
+      out[k] = fv;
+    }
+    return changed ? out : value;
+  }
+  return value;
+}
+
 function readJson(file) {
   try {
     // PS 5.1 tools write UTF-8 with BOM — strip it before parsing.
-    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+    const obj = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+    const fixed = deepFixMojibake(obj);
+    // Self-heal: persist the repair so future reads (including the PS
+    // scripts themselves) see clean data, not just this one render.
+    if (fixed !== obj) {
+      try { fs.writeFileSync(file, JSON.stringify(fixed, null, 2), 'utf8'); } catch (e) { /* repair still returned below */ }
+    }
+    return fixed;
   } catch (e) {
     return null;
   }
@@ -94,7 +142,11 @@ function kvGet(key) {
   if (!db) return null;
   try {
     const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(key);
-    return row ? JSON.parse(row.value) : null;
+    if (!row) return null;
+    const obj = JSON.parse(row.value);
+    const fixed = deepFixMojibake(obj);
+    if (fixed !== obj) kvSet(key, fixed);
+    return fixed;
   } catch (e) { return null; }
 }
 
@@ -197,7 +249,7 @@ ipcMain.handle('brief:saveDone', async (ev, date, state) => {
 });
 
 ipcMain.handle('brief:replan', () => {
-  if (pipelineRunning) return false;
+  if (pipelineRunning || activeRuns.size > 0) return false;
   runPipeline(true);
   return true;
 });
@@ -282,23 +334,16 @@ ipcMain.handle('kanban:save', (ev, data) => {
   return true;
 });
 
-ipcMain.handle('kanban:check', () => {
-  if (checkRunning || pipelineRunning) return false;
-  runCheck();
-  return true;
-});
+ipcMain.handle('kanban:check', () => runCheck('', false, false));
 
-ipcMain.handle('kanban:taskCheck', (ev, taskId) => {
-  if (checkRunning || pipelineRunning || !taskId) return false;
-  runCheck(String(taskId).slice(0, 60), false);
-  return true;
-});
+ipcMain.handle('kanban:taskCheck', (ev, taskId) => (taskId ? runCheck(String(taskId).slice(0, 60), false, false) : false));
 
-ipcMain.handle('kanban:taskReplan', (ev, taskId) => {
-  if (checkRunning || pipelineRunning || !taskId) return false;
-  runCheck(String(taskId).slice(0, 60), true);
-  return true;
-});
+ipcMain.handle('kanban:taskReplan', (ev, taskId) => (taskId ? runCheck(String(taskId).slice(0, 60), true, false) : false));
+
+// Trajectory-based task generation: reads GOALS/STATE/PROGRESS instead of
+// recent file activity, only ever proposes new tasks. Same concurrency pool
+// as checks/replans (cheap, patch-only writes to kanban.json).
+ipcMain.handle('kanban:generate', () => runCheck('', false, true));
 
 // Folder-drop task creation: resolve a dropped path to its directory + name.
 ipcMain.handle('path:dirInfo', (ev, p) => {
@@ -320,13 +365,34 @@ ipcMain.handle('dialog:pickFolder', async () => {
   return (r.canceled || !r.filePaths.length) ? null : r.filePaths[0];
 });
 
-let checkRunning = false;
+/* Concurrent AI runs: several checks/replans/generates can be in flight at
+   once (capped below), each tracked by its own short id so the AI page can
+   show and cancel them individually. The daily pipeline (full/replan) stays
+   exclusive — it rewrites kanban.json wholesale via Claude's own Write tool,
+   so it must never overlap with anything else that touches the board. */
+const MAX_CONCURRENT_AI = 4;
+const activeRuns = new Map(); // id -> { id, mode, taskId, pid, startedAt, logFile, killed, exclusive, est }
+let pipelineRunning = false;
+let reloadTimer = null;
 
-/* AI activity state: drives the bottom progress popup in the renderer.
-   Broadcast on change and queryable, so it survives page reloads.
-   `est` is the upfront token/cost estimate for the run: the average of past
-   successful runs of the same mode, or a static default before any history. */
-let aiState = { running: false, mode: null, startedAt: null, est: null };
+// Several runs can finish within moments of each other; coalesce into one
+// reload instead of reloading (and losing scroll/typing) once per run.
+function scheduleReload() {
+  if (reloadTimer) clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null;
+    if (win && !win.isDestroyed()) win.reload();
+  }, 1500);
+}
+
+function broadcastAiStatus() {
+  const list = Array.from(activeRuns.values()).map((r) => ({
+    id: r.id, mode: r.mode, taskId: r.taskId || null, startedAt: r.startedAt, est: r.est
+  }));
+  if (win && !win.isDestroyed()) {
+    try { win.webContents.send('ai:status', list); } catch (e) { /* window closing */ }
+  }
+}
 
 function readRuns() {
   try {
@@ -344,7 +410,8 @@ const EST_DEFAULTS = {
   full: { inputTokens: 25000, outputTokens: 6000, costUsd: 0.45 },
   replan: { inputTokens: 12000, outputTokens: 3000, costUsd: 0.20 },
   check: { inputTokens: 8000, outputTokens: 2000, costUsd: 0.05 },
-  'task-replan': { inputTokens: 8000, outputTokens: 1500, costUsd: 0.04 }
+  'task-replan': { inputTokens: 8000, outputTokens: 1500, costUsd: 0.04 },
+  'task-generate': { inputTokens: 6000, outputTokens: 1200, costUsd: 0.03 }
 };
 
 function estimateRun(mode) {
@@ -362,7 +429,7 @@ function estimateRun(mode) {
     };
   }
   const d = EST_DEFAULTS[mode] || EST_DEFAULTS.check;
-  const durations = { full: 420, replan: 240, check: 90, 'task-replan': 100 };
+  const durations = { full: 420, replan: 240, check: 90, 'task-replan': 100, 'task-generate': 90 };
   return {
     inputTokens: d.inputTokens, outputTokens: d.outputTokens, costUsd: d.costUsd,
     durationSec: durations[mode] || 120, source: 'default'
@@ -371,9 +438,9 @@ function estimateRun(mode) {
 
 /* Every AI run is journaled to core\ai-runs.jsonl with duration, token usage
    and cost (parsed from the CLI's json output in the run log), and status
-   (ok / killed). The AI page reads this and can kill the current run. */
+   (ok / killed / skipped — a check that exited early on zero activity).
+   The AI page reads this and can kill any currently running entry by id. */
 const AI_RUNS_FILE = path.join(ROOT, 'core', 'ai-runs.jsonl');
-let currentRun = null; // { pid, mode, startedAt, logFile, killed }
 
 function parseUsage(logFile) {
   try {
@@ -386,20 +453,23 @@ function parseUsage(logFile) {
     return {
       inputTokens: parseInt(grab(/"inputTokens"\s*:\s*(\d+)/g) || grab(/"input_tokens"\s*:\s*(\d+)/g) || '0', 10),
       outputTokens: parseInt(grab(/"outputTokens"\s*:\s*(\d+)/g) || grab(/"output_tokens"\s*:\s*(\d+)/g) || '0', 10),
-      costUsd: parseFloat(grab(/"costUSD"\s*:\s*([\d.]+)/g) || grab(/"total_cost_usd"\s*:\s*([\d.]+)/g) || '0')
+      costUsd: parseFloat(grab(/"costUSD"\s*:\s*([\d.]+)/g) || grab(/"total_cost_usd"\s*:\s*([\d.]+)/g) || '0'),
+      skipped: /^skipped:/.test(text.trim())
     };
   } catch (e) {
-    return { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    return { inputTokens: 0, outputTokens: 0, costUsd: 0, skipped: false };
   }
 }
 
 function recordRun(run) {
   const usage = parseUsage(run.logFile);
   const entry = {
+    id: run.id,
     start: new Date(run.startedAt).toISOString(),
     mode: run.mode,
+    taskId: run.taskId || null,
     durationSec: Math.round((Date.now() - run.startedAt) / 1000),
-    status: run.killed ? 'killed' : 'ok',
+    status: run.killed ? 'killed' : (usage.skipped ? 'skipped' : 'ok'),
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     costUsd: usage.costUsd
@@ -421,21 +491,27 @@ ipcMain.handle('task:scan', (ev, taskId, dir) => {
   return true;
 });
 
-// Open the last run's assembled context as a TXT for inspection.
+// Open the most relevant run's assembled context as a TXT for inspection:
+// whichever run started most recently, active or not.
 ipcMain.handle('ai:openContext', () => {
-  const mode = (currentRun && currentRun.mode) || (readRuns().slice(-1)[0] || {}).mode || 'check';
+  const running = Array.from(activeRuns.values()).pop();
+  const last = readRuns().slice(-1)[0] || {};
+  const mode = (running && running.mode) || last.mode || 'check';
+  const runId = (running && running.id) || last.id || '';
   const promptFiles = {
     full: 'prompt.md', replan: 'prompt-replan.md',
-    check: 'prompt-check.md', 'task-replan': 'prompt-task-replan.md'
+    check: 'prompt-check.md', 'task-replan': 'prompt-task-replan.md',
+    'task-generate': 'prompt-task-generate.md'
   };
   const pf = promptFiles[mode] || 'prompt-check.md';
   const parts = ['=== რეჟიმი: ' + mode + ' ===', ''];
   parts.push('=== PROMPT (' + pf + ') ===');
   try { parts.push(fs.readFileSync(path.join(ROOT, 'core', pf), 'utf8')); }
   catch (e) { parts.push('(ფაილი ვერ მოიძებნა)'); }
-  if (mode === 'check' || mode === 'task-replan') {
-    parts.push('', '=== check-digest.json — ზუსტად ეს მიეწოდა AI-ს ===');
-    try { parts.push(fs.readFileSync(path.join(ROOT, 'core', 'check-digest.json'), 'utf8')); }
+  if (mode === 'check' || mode === 'task-replan' || mode === 'task-generate') {
+    const digestName = runId ? `check-digest-${runId}.json` : 'check-digest.json';
+    parts.push('', '=== ' + digestName + ' — ზუსტად ეს მიეწოდა AI-ს ===');
+    try { parts.push(fs.readFileSync(path.join(ROOT, 'core', digestName), 'utf8')); }
     catch (e) { parts.push('(digest ჯერ არ არსებობს)'); }
   } else {
     parts.push('', '=== წყარო ფაილები, რომლებსაც AI კითხულობს ===',
@@ -448,46 +524,51 @@ ipcMain.handle('ai:openContext', () => {
   return true;
 });
 
-ipcMain.handle('ai:kill', () => {
-  if (!currentRun) return false;
-  currentRun.killed = true;
+// Cancel one specific run by id — several may be active at once.
+ipcMain.handle('ai:kill', (ev, runId) => {
+  const run = activeRuns.get(String(runId || ''));
+  if (!run) return false;
+  run.killed = true;
   // Kill the whole tree: powershell -> claude.cmd -> node.
-  spawn('taskkill', ['/PID', String(currentRun.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+  spawn('taskkill', ['/PID', String(run.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
   return true;
 });
 
-function setAiState(mode) {
-  aiState = mode
-    ? { running: true, mode, startedAt: Date.now(), est: estimateRun(mode) }
-    : { running: false, mode: null, startedAt: null, est: null };
-  if (win && !win.isDestroyed()) {
-    try { win.webContents.send('ai:status', aiState); } catch (e) { /* window closing */ }
-  }
-}
+ipcMain.handle('ai:status', () => Array.from(activeRuns.values()).map((r) => ({
+  id: r.id, mode: r.mode, taskId: r.taskId || null, startedAt: r.startedAt, est: r.est
+})));
 
-ipcMain.handle('ai:status', () => aiState);
-
-function runCheck(taskId, replan) {
-  if (checkRunning) return;
-  checkRunning = true;
-  const mode = replan ? 'task-replan' : 'check';
-  setAiState(mode);
+// taskId/replan/generate: which check-family flavor to run. Concurrent with
+// each other (capped at MAX_CONCURRENT_AI), always exclusive with the daily
+// pipeline (full/replan) since that rewrites kanban.json wholesale.
+function runCheck(taskId, replan, generate) {
+  if (pipelineRunning || activeRuns.size >= MAX_CONCURRENT_AI) return false;
+  const mode = generate ? 'task-generate' : (replan ? 'task-replan' : 'check');
+  const id = crypto.randomUUID().slice(0, 8);
   const args = [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
-    '-File', CHECK_SCRIPT
+    '-File', CHECK_SCRIPT, '-RunId', id
   ];
   if (taskId) args.push('-TaskId', taskId);
   if (replan) args.push('-Replan');
+  if (generate) args.push('-Generate');
   const ps = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
-  currentRun = { pid: ps.pid, mode, startedAt: Date.now(), logFile: path.join(ROOT, 'core', 'check-run.log'), killed: false };
-  ps.on('error', () => { checkRunning = false; currentRun = null; setAiState(null); });
+  const run = {
+    id, mode, taskId: taskId || null, pid: ps.pid, startedAt: Date.now(),
+    logFile: path.join(ROOT, 'core', `check-run-${id}.log`),
+    killed: false, exclusive: false, est: estimateRun(mode)
+  };
+  activeRuns.set(id, run);
+  broadcastAiStatus();
+  ps.on('error', () => { activeRuns.delete(id); broadcastAiStatus(); });
   ps.on('exit', async () => {
-    checkRunning = false;
-    if (currentRun) { recordRun(currentRun); currentRun = null; }
-    setAiState(null);
+    activeRuns.delete(id);
+    recordRun(run);
+    broadcastAiStatus();
     try { syncFilesToDb(); } catch (e) { /* file fallback still works */ }
-    if (win && !win.isDestroyed()) win.reload();
+    scheduleReload();
   });
+  return true;
 }
 
 /* Analytics: raw file-change events collected by core\monitor.ps1 (no AI)
@@ -569,12 +650,11 @@ function createWindow() {
   win.loadFile(PAGE);
 }
 
-let pipelineRunning = false;
-
 function runPipeline(force) {
-  if (pipelineRunning) return;
+  if (pipelineRunning || activeRuns.size > 0) return;
   pipelineRunning = true;
-  setAiState(force ? 'replan' : 'full');
+  const mode = force ? 'replan' : 'full';
+  const id = 'pipeline';
   // -NoShow: the Electron window is the UI; skip the legacy WPF popup.
   // -Force (replan): regenerate today's briefing taking done-state into account.
   const args = [
@@ -583,14 +663,21 @@ function runPipeline(force) {
   ];
   if (force) args.push('-Force');
   const ps = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
-  currentRun = { pid: ps.pid, mode: force ? 'replan' : 'full', startedAt: Date.now(), logFile: path.join(ROOT, 'core', 'last-run.log'), killed: false };
-  ps.on('error', () => { pipelineRunning = false; currentRun = null; setAiState(null); });
+  const run = {
+    id, mode, taskId: null, pid: ps.pid, startedAt: Date.now(),
+    logFile: path.join(ROOT, 'core', 'last-run.log'),
+    killed: false, exclusive: true, est: estimateRun(mode)
+  };
+  activeRuns.set(id, run);
+  broadcastAiStatus();
+  ps.on('error', () => { pipelineRunning = false; activeRuns.delete(id); broadcastAiStatus(); });
   ps.on('exit', async () => {
     pipelineRunning = false;
-    if (currentRun) { recordRun(currentRun); currentRun = null; }
-    setAiState(null);
+    activeRuns.delete(id);
+    recordRun(run);
+    broadcastAiStatus();
     try { syncFilesToDb(); } catch (e) { /* files still serve as fallback */ }
-    if (win && !win.isDestroyed()) win.reload();
+    scheduleReload();
   });
 }
 
