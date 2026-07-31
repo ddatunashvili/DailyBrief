@@ -16,8 +16,9 @@ core/STATE.md
 core/PROGRESS.md
 core/dirs.txt
 core/top-dirs.txt
-core/check-digest.json
-core/check-patch.json
+core/check-digest*.json
+core/check-patch*.json
+core/kanban.json.pre-repair.bak
 core/ai-runs.jsonl
 core/last-ai-context.txt
 core/dailybrief.db

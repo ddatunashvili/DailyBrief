@@ -158,7 +158,11 @@ if ($Generate) {
                 } catch { $scanDiff = $null }
             }
             # Advance the baseline: next check diffs from this moment.
-            & (Join-Path $base 'scan-folder.ps1') -TaskId ([string]$t.id) -Dir ([string]$dirs[0])
+            # $null = : this runs inside the $digestTasks foreach EXPRESSION —
+            # anything it emits (stray output, error records) would be captured
+            # into the array and ConvertTo-Json would serialize whole .NET
+            # object graphs into the digest (observed: a 391 MB digest file).
+            $null = & (Join-Path $base 'scan-folder.ps1') -TaskId ([string]$t.id) -Dir ([string]$dirs[0]) 2>$null
         }
 
         $subtasks = @()
