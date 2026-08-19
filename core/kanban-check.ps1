@@ -11,6 +11,7 @@ param(
     [string]$TaskId = '',
     [switch]$Replan,
     [switch]$Generate,
+    [switch]$Command,
     [string]$RunId = ''
 )
 
@@ -28,10 +29,27 @@ $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
 function Norm-Title([string]$s) { return ($s + '').Trim().ToLowerInvariant() }
-function Read-TextFile([string]$name) {
+
+# Georgian UI strings live in a UTF-8 JSON file on purpose: this script stays
+# ASCII so PS 5.1 (which reads a BOM-less .ps1 as ANSI) can never mangle them.
+$STR = @{ autoBound = 'auto-linked folder:'; commentApplied = 'comment applied.'; commentFailed = 'comment failed.' }
+$strPath = Join-Path $base 'strings.json'
+if (Test-Path $strPath) {
+    try {
+        $sj = Get-Content $strPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($k in @($sj.PSObject.Properties.Name)) { $STR[$k] = [string]$sj.$k }
+    } catch {}
+}
+function Read-TextFile([string]$name, [int]$MaxChars = 3000) {
     $p = Join-Path $base $name
-    if (Test-Path $p) { return (Get-Content $p -Raw -Encoding UTF8) }
-    return ''
+    if (-not (Test-Path $p)) { return '' }
+    # The [string] cast is load-bearing: Get-Content -Raw hands back a string
+    # DECORATED with PSPath/PSDrive/Provider note properties, and ConvertTo-Json
+    # happily serializes that whole .NET provider graph (observed: a 292 MB
+    # digest). The cast turns it back into a plain System.String.
+    $text = [string](Get-Content $p -Raw -Encoding UTF8)
+    if ($text.Length -gt $MaxChars) { $text = $text.Substring(0, $MaxChars) }
+    return $text
 }
 
 # Per-run file names: several checks can be in flight at once (main.js caps
@@ -47,24 +65,218 @@ if (Test-Path $patchPath) { Remove-Item $patchPath -Force }
 $kanbanPath = Join-Path $base 'kanban.json'
 $kanban = Get-Content $kanbanPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
+# ---------- project registry (built by discover-projects.ps1, no AI) ----------
+$projects = @()
+$projectsPath = Join-Path $base 'projects.json'
+if (Test-Path $projectsPath) {
+    try { $projects = @((Get-Content $projectsPath -Raw -Encoding UTF8 | ConvertFrom-Json).projects) } catch { $projects = @() }
+}
+
+# PS 5.1 serializes an EMPTY array inside an object as {}, so a round-tripped
+# "no items" list comes back as an empty PSCustomObject. Without this every
+# such field would turn into a one-element array holding a junk object.
+function AsArr($v) {
+    if ($null -eq $v) { return @() }
+    if ($v -is [array]) { return $v }
+    if ($v -is [string]) { return @($v) }
+    if ($v -is [PSCustomObject] -and @($v.PSObject.Properties).Count -eq 0) { return @() }
+    return @($v)
+}
+
+# One compact card per project: enough for the model to know WHAT the project
+# is (stack, readme intent) and what moved in it, without reading any file.
+function Project-Card($p, [switch]$Full) {
+    $card = @{
+        name = [string]$p.name; dir = [string]$p.dir
+        stack = AsArr $p.stack; changed14d = [int]$p.changed14d
+        lastTouched = [string]$p.lastTouched
+    }
+    if ($p.isGit) {
+        $card.branch = [string]$p.branch
+        $card.dirtyCount = [int]$p.dirtyCount
+        $card.lastCommits = @(AsArr $p.lastCommits | Select-Object -First 3)
+    }
+    if ([int]$p.todoCount -gt 0) { $card.todoCount = [int]$p.todoCount }
+    if ($Full) {
+        $card.readme = [string]$p.readme
+        $card.pkgDesc = [string]$p.pkgDesc
+        $card.recentFiles = @(AsArr $p.recentFiles | Select-Object -First 6)
+        $card.dirtySample = @(AsArr $p.dirtySample | Select-Object -First 6)
+        $card.todoSample = @(AsArr $p.todoSample | Select-Object -First 4)
+    }
+    return $card
+}
+
+function Find-ProjectByDir([string]$dir) {
+    if (-not $dir) { return $null }
+    $sep = [char]92
+    foreach ($p in $projects) {
+        $pd = [string]$p.dir
+        if ($pd -eq $dir -or
+            $dir.StartsWith($pd + $sep, [StringComparison]::OrdinalIgnoreCase) -or
+            $pd.StartsWith($dir + $sep, [StringComparison]::OrdinalIgnoreCase)) { return $p }
+    }
+    return $null
+}
+
+# ---------- auto-bind: a task with no folder is a dead task ----------
+# Checks compare a task against its linked folders, but AI-created tasks were
+# born with dirs=[] - so they never collected any evidence and rotted on the
+# board. Bind them by matching the task's own words against the registry.
+$stopWords = @('project', 'projects', 'src', 'app', 'apps', 'desktop', 'onedrive', 'users', 'davit',
+               'com', 'www', 'main', 'master', 'new', 'the', 'and', 'for', 'backup', 'test', 'temp')
+
+# Georgian letters are part of a word here; the range is built from char codes
+# so this file needs no non-ASCII byte and no regex escape.
+$geoFrom = [char]0x10A0
+$geoTo   = [char]0x10FF
+
+function Get-Tokens([string]$s) {
+    $m = [regex]::Matches(($s + '').ToLowerInvariant(), "[a-z0-9$geoFrom-$geoTo]{3,}")
+    return @($m | ForEach-Object { $_.Value } | Where-Object { $stopWords -notcontains $_ } | Select-Object -Unique)
+}
+
+function Guess-Dir([string]$text) {
+    $t = ($text + '').ToLowerInvariant()
+    if (-not $t) { return '' }
+    $best = ''; $bestScore = 0; $tie = $false; $bestAct = -1
+    foreach ($p in $projects) {
+        $dir = [string]$p.dir
+        $score = 0
+        if ($t.Contains($dir.ToLowerInvariant())) { $score += 100 }
+        $nameLow = ([string]$p.name).ToLowerInvariant()
+        if ($nameLow -and $t.Contains($nameLow)) { $score += 40 }
+        $leaf = (Split-Path $dir -Leaf).ToLowerInvariant()
+        if ($leaf.Length -ge 3 -and $t.Contains($leaf)) { $score += 25 }
+        foreach ($tok in (Get-Tokens ([string]$p.name))) { if ($t.Contains($tok)) { $score += 10 } }
+        if ($score -gt $bestScore) { $best = $dir; $bestScore = $score; $tie = $false; $bestAct = [int]$p.changed14d }
+        elseif ($score -eq $bestScore -and $score -gt 0 -and $best -ne $dir) {
+            # Nested repos score identically (Discord_Ge vs Discord_Ge\discord-ge).
+            # The more active one is the folder the work actually happens in.
+            $sep = [char]92
+            if ([int]$p.changed14d -gt $bestAct) { $best = $dir; $bestAct = [int]$p.changed14d; $tie = $false }
+            elseif ([int]$p.changed14d -lt $bestAct) { }
+            elseif ($dir.StartsWith($best + $sep, [StringComparison]::OrdinalIgnoreCase)) {
+                # Equally active nested repos: the inner one is the actual work.
+                $best = $dir; $tie = $false
+            }
+            elseif ($best.StartsWith($dir + $sep, [StringComparison]::OrdinalIgnoreCase)) { $tie = $false }
+            else { $tie = $true }
+        }
+    }
+    # An ambiguous guess is worse than none: a wrong folder produces confident
+    # nonsense in every later check.
+    # One distinctive shared word (a project name) is enough; ties are resolved
+    # above by activity, and stop-words keep generic matches out.
+    if ($bestScore -ge 10 -and -not $tie) { return $best }
+    return ''
+}
+
+function Save-Kanban($data) {
+    $mx = New-Object System.Threading.Mutex($false, 'DailyBriefKanbanWrite')
+    $got = $false
+    try {
+        $got = $mx.WaitOne(30000)
+        [IO.File]::WriteAllText($kanbanPath, ($data | ConvertTo-Json -Depth 10), $utf8NoBom)
+    } finally {
+        if ($got) { $mx.ReleaseMutex() }
+        $mx.Dispose()
+    }
+}
+
+$bound = $false
+foreach ($t in @($kanban.tasks | Where-Object { -not $_.done })) {
+    if ($t.PSObject.Properties['dirs'] -and @($t.dirs).Count -gt 0) { continue }
+    $guess = Guess-Dir (([string]$t.title) + ' ' + ([string]$t.desc))
+    if (-not $guess -or -not (Test-Path $guess)) { continue }
+    if ($t.PSObject.Properties['dirs']) { $t.dirs = @($guess) }
+    else { $t | Add-Member -NotePropertyName dirs -NotePropertyValue @($guess) }
+    $note = New-Object PSObject -Property @{ text = ($STR.autoBound + ' ' + $guess); at = $now }
+    $notes = @()
+    if ($t.PSObject.Properties['aiNotes'] -and $t.aiNotes) { $notes = @($t.aiNotes) }
+    $notes += $note
+    if ($t.PSObject.Properties['aiNotes']) { $t.aiNotes = @($notes | Select-Object -Last 10) }
+    else { $t | Add-Member -NotePropertyName aiNotes -NotePropertyValue @($notes) }
+    # Baseline it immediately, otherwise the first check after binding reports
+    # the whole repo as new work.
+    $null = & (Join-Path $base 'scan-folder.ps1') -TaskId ([string]$t.id) -Dir $guess 2>$null
+    $bound = $true
+}
+if ($bound) { Save-Kanban $kanban }
+
 $archTitles = @()
 if ($kanban.PSObject.Properties['archive'] -and $kanban.archive) {
     $archTitles = @($kanban.archive | ForEach-Object { [string]$_.title })
 }
-$doneTitlesAll = @(@($kanban.tasks | Where-Object { $_.done } | ForEach-Object { [string]$_.title } | Select-Object -First 15) + @($archTitles | Select-Object -First 15))
+# Only a short "already handled" list: it exists to stop duplicates, and every
+# extra title is pure input tokens on every single run.
+$doneTitlesAll = @(@($kanban.tasks | Where-Object { $_.done } | ForEach-Object { [string]$_.title } | Select-Object -Last 8) + @($archTitles | Select-Object -Last 6))
 
 if ($Generate) {
     # ---------- Trajectory digest: overall direction, not recent-file activity ----------
     # Content is embedded directly (not left for Claude to Read) so the run
     # stays within the same tiny --max-turns budget as a normal check.
+    # Projects are the unit of planning here, not directory byte-scores: each
+    # card carries stack, readme intent, recent commits and open TODOs, so the
+    # model proposes work that exists instead of narrating folder-size trends.
+    $genProjects = @($projects |
+        Where-Object { [int]$_.changed14d -gt 0 -or [int]$_.dirtyCount -gt 0 -or [int]$_.todoCount -gt 0 } |
+        Sort-Object @{e = { [int]$_.changed14d }; Descending = $true} |
+        Select-Object -First 12 |
+        ForEach-Object { Project-Card $_ -Full })
+    $boundDirs = @($kanban.tasks | Where-Object { -not $_.done } | ForEach-Object { @($_.dirs) } | Where-Object { $_ })
+
     $digest = @{
         now = $now
         target = 'GENERATE'
-        goals = Read-TextFile 'GOALS.md'
-        state = Read-TextFile 'STATE.md'
-        progress = Read-TextFile 'PROGRESS.md'
-        topDirsText = Read-TextFile 'top-dirs.txt'
+        goals = Read-TextFile 'GOALS.md' 1500
+        state = Read-TextFile 'STATE.md' 1500
+        progress = Read-TextFile 'PROGRESS.md' 800
+        projects = $genProjects
+        boundDirs = $boundDirs
         activeTitles = @($kanban.tasks | ForEach-Object { [string]$_.title })
+        doneTitles = $doneTitlesAll
+    }
+    [IO.File]::WriteAllText($digestPath, ($digest | ConvertTo-Json -Depth 6), $utf8NoBom)
+} elseif ($Command) {
+    # The user wrote a comment on a task. That comment is an ORDER inside the
+    # task's scope (plan it better / split this / this is done), so it gets its
+    # own tiny run with the project card attached.
+    $t = @($kanban.tasks | Where-Object { $_.id -eq $TaskId }) | Select-Object -First 1
+    if (-not $t) {
+        [IO.File]::WriteAllText($log, 'skipped: task not found', $utf8NoBom)
+        exit 0
+    }
+    $pending = @()
+    if ($t.PSObject.Properties['comments'] -and $t.comments) {
+        $pending = @($t.comments | Where-Object { $_.by -eq 'user' -and $_.state -eq 'new' } |
+            Select-Object -Last 5 | ForEach-Object { [string]$_.text })
+    }
+    if ($pending.Count -eq 0) {
+        [IO.File]::WriteAllText($log, 'skipped: no pending comment - zero AI tokens spent', $utf8NoBom)
+        exit 0
+    }
+    $dirs = @()
+    if ($t.PSObject.Properties['dirs'] -and $t.dirs) { $dirs = @($t.dirs) }
+    $proj = if ($dirs.Count -gt 0) { Find-ProjectByDir ([string]$dirs[0]) } else { $null }
+    $subs = @()
+    if ($t.PSObject.Properties['subtasks'] -and $t.subtasks) {
+        $subs = @($t.subtasks | Select-Object -First 30 | ForEach-Object { @{ text = [string]$_.text; done = [bool]$_.done } })
+    }
+    $history = @()
+    if ($t.PSObject.Properties['comments'] -and $t.comments) {
+        $history = @($t.comments | Select-Object -Last 6 | ForEach-Object { @{ by = [string]$_.by; text = [string]$_.text } })
+    }
+    $digest = @{
+        now = $now
+        target = 'COMMAND'
+        task = @{
+            id = [string]$t.id; title = [string]$t.title; desc = [string]$t.desc
+            status = [string]$t.status; dirs = $dirs; subtasks = $subs
+        }
+        commands = $pending
+        history = $history
+        project = if ($proj) { Project-Card $proj -Full } else { $null }
         doneTitles = $doneTitlesAll
     }
     [IO.File]::WriteAllText($digestPath, ($digest | ConvertTo-Json -Depth 6), $utf8NoBom)
@@ -158,7 +370,7 @@ if ($Generate) {
                 } catch { $scanDiff = $null }
             }
             # Advance the baseline: next check diffs from this moment.
-            # $null = : this runs inside the $digestTasks foreach EXPRESSION —
+            # $null = : this runs inside the $digestTasks foreach EXPRESSION ?
             # anything it emits (stray output, error records) would be captured
             # into the array and ConvertTo-Json would serialize whole .NET
             # object graphs into the digest (observed: a 391 MB digest file).
@@ -170,11 +382,19 @@ if ($Generate) {
             $subtasks = @($t.subtasks | Select-Object -First 15 |
                 ForEach-Object { @{ text = [string]$_.text; done = [bool]$_.done } })
         }
+        # What the linked folder actually IS - without it the model can only
+        # comment on how many bytes moved.
+        $projCard = $null
+        if ($dirs.Count -gt 0) {
+            $pp = Find-ProjectByDir ([string]$dirs[0])
+            if ($pp) { $projCard = Project-Card $pp -Full:$Replan }
+        }
+
         @{
             id = [string]$t.id; title = [string]$t.title; status = [string]$t.status
             desc = $desc; dirs = $dirs; subtasks = $subtasks
             changeCount = $changeCount; changes = $changes; comments = $comments
-            scanDiff = $scanDiff
+            scanDiff = $scanDiff; project = $projCard
         }
     })
 
@@ -215,10 +435,25 @@ if ($Generate) {
 }
 
 # ---------- Claude: digest in, tiny patch out ----------
+# A digest is a few KB by design. Anything larger means a serialization bug
+# upstream; sending it would burn tokens and fail anyway.
+$digestSize = (Get-Item $digestPath -ErrorAction SilentlyContinue).Length
+if ($digestSize -gt 1MB) {
+    [IO.File]::WriteAllText($log, ('skipped: digest too large ({0:N0} bytes) - not sent to the model' -f $digestSize), $utf8NoBom)
+    exit 0
+}
+
 $promptFile = if ($Generate) { 'prompt-task-generate.md' }
+              elseif ($Command) { 'prompt-task-command.md' }
               elseif ($Replan -and $TaskId) { 'prompt-task-replan.md' }
               else { 'prompt-check.md' }
-$prompt = (Get-Content (Join-Path $base $promptFile) -Raw -Encoding UTF8).Replace('{{NOW}}', $now)
+# The exact per-run file names go INTO the prompt. Left to guess a suffixed
+# name, the model spends turns listing the folder and can write the patch
+# where the script never looks for it.
+$prompt = (Get-Content (Join-Path $base $promptFile) -Raw -Encoding UTF8).
+    Replace('{{NOW}}', $now).
+    Replace('{{DIGEST}}', ("check-digest-$runToken.json")).
+    Replace('{{PATCH}}', ("check-patch-$runToken.json"))
 
 Set-Location $base
 $ErrorActionPreference = 'Continue'
@@ -230,7 +465,7 @@ $claudeArgs = @(
     '--allowedTools', 'Read,Write',
     '--allow-dangerously-skip-permissions',
     '--dangerously-skip-permissions',
-    '--max-turns', '5',
+    '--max-turns', '8',
     '--output-format', 'json'
 )
 $prompt | & $claude @claudeArgs 2>&1 | Out-File $log -Encoding utf8
@@ -266,9 +501,19 @@ if (Test-Path $patchPath) {
                 if ($t.PSObject.Properties['aiNotes']) { $t.aiNotes = $notes }
                 else { $t | Add-Member -NotePropertyName aiNotes -NotePropertyValue $notes }
             }
-            # Hard rule: the AI may never downgrade a task the user marked urgent.
-            if ($u.PSObject.Properties['status'] -and $valid -contains $u.status -and $t.status -ne 'urgent') { $t.status = [string]$u.status }
+            # A direct order from the user may rewrite the title and override
+            # even an urgent status; a routine check may not.
+            if ($Command -and $u.PSObject.Properties['title'] -and $u.title) { $t.title = ([string]$u.title).Trim() }
+            if ($u.PSObject.Properties['status'] -and $valid -contains $u.status -and ($Command -or $t.status -ne 'urgent')) { $t.status = [string]$u.status }
             if ($u.PSObject.Properties['desc'] -and $u.desc) { $t.desc = [string]$u.desc }
+            # The model's answer to the user's comment, posted back into the thread.
+            if ($u.PSObject.Properties['reply'] -and $u.reply) {
+                $cs = @()
+                if ($t.PSObject.Properties['comments'] -and $t.comments) { $cs = @($t.comments) }
+                $cs += (New-Object PSObject -Property @{ by = 'ai'; text = [string]$u.reply; at = $stamp; state = 'applied' })
+                if ($t.PSObject.Properties['comments']) { $t.comments = $cs }
+                else { $t | Add-Member -NotePropertyName comments -NotePropertyValue $cs }
+            }
             if ($u.PSObject.Properties['subtasks'] -and $u.subtasks) {
                 # Keep done-state of subtasks whose text survived the replan.
                 $oldDone = @{}
@@ -295,12 +540,28 @@ if (Test-Path $patchPath) {
             if (-not $n -or -not $n.id -or -not $n.title) { continue }
             $nTitleNorm = Norm-Title $n.title
             if ($existingIds -contains [string]$n.id -or $existingTitlesNorm -contains $nTitleNorm) { continue }
+            # Bind the folder at birth. A task with dirs=[] never collects any
+            # evidence, so every later check has nothing to say about it.
+            $newDirs = @()
+            if ($n.PSObject.Properties['dir'] -and $n.dir -and (Test-Path ([string]$n.dir))) { $newDirs = @([string]$n.dir) }
+            else {
+                $g = Guess-Dir (([string]$n.title) + ' ' + ([string]$n.desc) + ' ' + ([string]$n.dir))
+                if ($g) { $newDirs = @($g) }
+            }
+            $ntSubs = @()
+            if ($n.PSObject.Properties['subtasks'] -and $n.subtasks) {
+                $ntSubs = @($n.subtasks | Select-Object -First 15 |
+                    ForEach-Object { New-Object PSObject -Property @{ text = [string]$_; done = $false } })
+            }
             $nt = New-Object PSObject -Property @{
                 id = [string]$n.id; title = [string]$n.title; desc = [string]$n.desc
                 status = if ($valid -contains $n.status) { [string]$n.status } else { 'planning' }
                 done = $false; createdBy = 'ai'
                 createdAt = $stamp; updatedAt = $stamp
-                comments = @(); aiNotes = @(); dirs = @()
+                comments = @(); aiNotes = @(); dirs = $newDirs; subtasks = $ntSubs
+            }
+            if ($newDirs.Count -gt 0) {
+                $null = & (Join-Path $base 'scan-folder.ps1') -TaskId ([string]$n.id) -Dir ([string]$newDirs[0]) 2>$null
             }
             $fresh.tasks = @($fresh.tasks) + $nt
             $existingIds += [string]$n.id
@@ -314,6 +575,33 @@ if (Test-Path $patchPath) {
     } finally {
         if ($gotLock) { $mutex.ReleaseMutex() }
         $mutex.Dispose()
+    }
+}
+
+# A pending comment must always end up acknowledged, patch or no patch:
+# main.js re-fires a command run for every comment still marked "new", so a
+# failed run left un-acked would retrigger itself on every board save.
+if ($Command -and $TaskId) {
+    $mutex2 = New-Object System.Threading.Mutex($false, 'DailyBriefKanbanWrite')
+    $got2 = $false
+    try {
+        $got2 = $mutex2.WaitOne(30000)
+        $fresh2 = Get-Content $kanbanPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $t2 = $fresh2.tasks | Where-Object { $_.id -eq $TaskId } | Select-Object -First 1
+        if ($t2 -and $t2.PSObject.Properties['comments'] -and $t2.comments) {
+            $changed = $false
+            foreach ($c in @($t2.comments)) {
+                if ($c.PSObject.Properties['state'] -and $c.state -eq 'new') {
+                    $c.state = 'applied'; $changed = $true
+                }
+            }
+            if ($changed) { [IO.File]::WriteAllText($kanbanPath, ($fresh2 | ConvertTo-Json -Depth 10), $utf8NoBom) }
+        }
+    } catch {
+        Add-Content $log ('[warn] comment ack failed: ' + $_.Exception.Message)
+    } finally {
+        if ($got2) { $mutex2.ReleaseMutex() }
+        $mutex2.Dispose()
     }
 }
 

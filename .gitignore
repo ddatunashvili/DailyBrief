@@ -20,6 +20,8 @@ core/check-digest*.json
 core/check-patch*.json
 core/kanban.json.pre-repair.bak
 core/ai-runs.jsonl
+core/projects.json
+core/questions.json
 core/last-ai-context.txt
 core/dailybrief.db
 core/dailybrief.db-shm

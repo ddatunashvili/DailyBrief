@@ -1,12 +1,13 @@
 {
   "name": "dailybrief-app",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Daily briefing desktop app: Electron shell + background Claude pipeline + local MongoDB",
   "main": "main.js",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win dir"
+    "build": "electron-builder --win dir",
+    "release": "electron-builder --win --publish always"
   },
   "devDependencies": {
     "electron": "^33.0.0",
@@ -16,7 +17,13 @@
   "build": {
     "appId": "ge.davit.dailybrief",
     "productName": "DailyBrief",
-    "publish": null,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ddatunashvili",
+        "repo": "DailyBrief"
+      }
+    ],
     "directories": {
       "output": "output",
       "buildResources": "build"
@@ -35,10 +42,12 @@
     },
     "nsis": {
       "oneClick": true,
-      "artifactName": "DailyBrief-Setup-${version}.exe"
+      "artifactName": "DailyBrief-Setup-${version}.exe",
+      "differentialPackage": false
     }
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^12.11.1",
+    "electron-updater": "^6.8.9"
   }
 }

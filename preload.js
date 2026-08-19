@@ -29,5 +29,23 @@ contextBridge.exposeInMainWorld('dailybrief', {
   aiKill: (runId) => ipcRenderer.invoke('ai:kill', runId),
   aiOpenContext: () => ipcRenderer.invoke('ai:openContext'),
   scanFolder: (taskId, dir) => ipcRenderer.invoke('task:scan', taskId, dir),
-  kanbanGenerate: () => ipcRenderer.invoke('kanban:generate')
+  kanbanGenerate: () => ipcRenderer.invoke('kanban:generate'),
+  // Auto-plan a task the first time it's opened without a checklist.
+  ensurePlan: (id) => ipcRenderer.invoke('kanban:ensurePlan', id),
+  // Project registry (built by discover-projects.ps1, no AI).
+  projectsLoad: () => ipcRenderer.invoke('projects:load'),
+  projectsRefresh: () => ipcRenderer.invoke('projects:refresh'),
+  projectsOpen: (dir) => ipcRenderer.invoke('projects:open', dir),
+  onProjectsUpdated: (cb) => ipcRenderer.on('projects:updated', () => cb()),
+  // The AI's open questions and the user's answers to them.
+  questionsLoad: () => ipcRenderer.invoke('questions:load'),
+  questionsAnswer: (id, answer) => ipcRenderer.invoke('questions:answer', id, answer),
+  // Settings + updates.
+  settingsGet: () => ipcRenderer.invoke('settings:get'),
+  settingsSet: (patch) => ipcRenderer.invoke('settings:set', patch),
+  appInfo: () => ipcRenderer.invoke('app:info'),
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateState: () => ipcRenderer.invoke('update:state'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  onUpdateState: (cb) => ipcRenderer.on('update:state', (ev, state) => cb(state))
 });

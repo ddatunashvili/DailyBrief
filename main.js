@@ -32,6 +32,11 @@ const PLANS_FILE = path.join(ROOT, 'core', 'plans.json');
 const KANBAN_FILE = path.join(ROOT, 'core', 'kanban.json');
 const CHECK_SCRIPT = path.join(ROOT, 'core', 'kanban-check.ps1');
 const MONITOR_SCRIPT = path.join(ROOT, 'core', 'monitor.ps1');
+// Project registry: what the user's folders actually ARE (stack, commits,
+// dirty files, TODOs). Built by a script, read by every AI run and the UI.
+const DISCOVER_SCRIPT = path.join(ROOT, 'core', 'discover-projects.ps1');
+const PROJECTS_FILE = path.join(ROOT, 'core', 'projects.json');
+const QUESTIONS_FILE = path.join(ROOT, 'core', 'questions.json');
 const ANALYTICS_DIR = path.join(ROOT, 'core', 'analytics');
 const SNAP_DIR = path.join(ROOT, 'core', 'snapshots');
 const ICON = path.join(ROOT, 'build', 'icon.png');
@@ -326,10 +331,14 @@ function sanitizeKanban(data) {
       createdBy: (t && t.createdBy) === 'user' ? 'user' : 'ai',
       createdAt: (t && t.createdAt) || now,
       updatedAt: (t && t.updatedAt) || now,
+      // state: "new" = a user comment the AI has not acted on yet. Saving the
+      // board is what fires the command run, and the check script flips it to
+      // "applied" when it's done.
       comments: (Array.isArray(t && t.comments) ? t.comments : []).slice(0, 100).map((c) => ({
         by: (c && c.by) === 'ai' ? 'ai' : 'user',
         text: String(c && c.text || '').slice(0, 1000),
-        at: (c && c.at) || now
+        at: (c && c.at) || now,
+        state: (c && c.state) === 'new' ? 'new' : 'applied'
       })),
       aiNotes: (Array.isArray(t && t.aiNotes) ? t.aiNotes : []).slice(-10).map((n) => ({
         text: String(n && n.text || '').slice(0, 500),
@@ -342,7 +351,10 @@ function sanitizeKanban(data) {
       subtasks: (Array.isArray(t && t.subtasks) ? t.subtasks : []).slice(0, 30).map((s) => ({
         text: String(s && s.text || '').slice(0, 300),
         done: !!(s && s.done)
-      })).filter((s) => s.text)
+      })).filter((s) => s.text),
+      // Set once the first time the task is opened with an empty checklist, so
+      // the auto-plan run fires exactly once per task.
+      planRequested: !!(t && t.planRequested)
     };
     if (isArchive) out.archivedAt = (t && t.archivedAt) || now;
     return out;
@@ -360,7 +372,31 @@ ipcMain.handle('kanban:save', (ev, data) => {
   const clean = sanitizeKanban(data);
   kvSet('kanban', clean);
   fs.writeFileSync(KANBAN_FILE, JSON.stringify(clean, null, 2), 'utf8');
+  // A user comment is an order inside that task's scope, not a sticky note:
+  // every task carrying an unhandled comment gets its own tiny AI run.
+  clean.tasks
+    .filter((t) => (t.comments || []).some((c) => c.by === 'user' && c.state === 'new'))
+    .slice(0, MAX_CONCURRENT_AI)
+    .forEach((t) => runCheck(t.id, false, false, true));
   return true;
+});
+
+// Opening a task with an empty checklist plans it once, automatically —
+// the user should never have to press "replan" to get a first plan.
+ipcMain.handle('kanban:ensurePlan', (ev, taskId) => {
+  const id = String(taskId || '').slice(0, 60);
+  if (!id) return false;
+  const board = kvGet('kanban') || readKanbanFile();
+  if (!board) return false;
+  const t = (board.tasks || []).find((x) => x.id === id);
+  if (!t || t.done || t.planRequested) return false;
+  if ((t.subtasks || []).length > 0) return false;
+  // Mark first: the run is async and the board reloads when it lands, so the
+  // flag is what stops a second open from firing another run.
+  t.planRequested = true;
+  kvSet('kanban', board);
+  try { fs.writeFileSync(KANBAN_FILE, JSON.stringify(board, null, 2), 'utf8'); } catch (e) {}
+  return runCheck(id, true, false, false);
 });
 
 ipcMain.handle('kanban:check', () => runCheck('', false, false));
@@ -373,6 +409,91 @@ ipcMain.handle('kanban:taskReplan', (ev, taskId) => (taskId ? runCheck(String(ta
 // recent file activity, only ever proposes new tasks. Same concurrency pool
 // as checks/replans (cheap, patch-only writes to kanban.json).
 ipcMain.handle('kanban:generate', () => runCheck('', false, true));
+
+/* Projects: the registry the AI plans from. Built by discover-projects.ps1
+   (no AI), refreshed alongside the activity monitor. */
+
+let discoverRunning = false;
+
+function runDiscover() {
+  if (discoverRunning) return false;
+  discoverRunning = true;
+  const ps = spawn('powershell.exe', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+    '-File', DISCOVER_SCRIPT
+  ], { windowsHide: true, stdio: 'ignore' });
+  ps.on('error', () => { discoverRunning = false; });
+  ps.on('exit', () => {
+    discoverRunning = false;
+    if (win && !win.isDestroyed()) { try { win.webContents.send('projects:updated'); } catch (e) {} }
+  });
+  return true;
+}
+
+ipcMain.handle('projects:load', () => {
+  const data = readJson(PROJECTS_FILE);
+  if (!data || !Array.isArray(data.projects)) return { generatedAt: null, projects: [] };
+  return data;
+});
+
+ipcMain.handle('projects:refresh', () => runDiscover());
+
+// Open a project folder in Explorer straight from the projects page.
+ipcMain.handle('projects:open', (ev, dir) => {
+  const p = String(dir || '');
+  if (!p || !fs.existsSync(p)) return false;
+  shell.openPath(p);
+  return true;
+});
+
+/* Questions: the AI's open questions to the user. Without a place to answer
+   them the model just repeated "waiting for David" in every briefing. */
+
+function readQuestions() {
+  const data = readJson(QUESTIONS_FILE);
+  const list = data && Array.isArray(data.questions) ? data.questions : [];
+  return list.slice(0, 50).map((q) => ({
+    id: String(q && q.id || '').slice(0, 60),
+    text: String(q && q.text || '').slice(0, 600),
+    project: String(q && q.project || '').slice(0, 500),
+    at: String(q && q.at || ''),
+    answer: String(q && q.answer || '').slice(0, 1000),
+    answeredAt: String(q && q.answeredAt || '')
+  })).filter((q) => q.id && q.text);
+}
+
+ipcMain.handle('questions:load', () => readQuestions());
+
+ipcMain.handle('questions:answer', (ev, id, answer) => {
+  const qs = readQuestions();
+  const q = qs.find((x) => x.id === String(id || ''));
+  if (!q) return false;
+  q.answer = String(answer || '').slice(0, 1000);
+  q.answeredAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  fs.writeFileSync(QUESTIONS_FILE, JSON.stringify({ questions: qs }, null, 2), 'utf8');
+  return true;
+});
+
+/* Settings: small key/value bag kept in the app database. */
+
+const DEFAULT_SETTINGS = { autoUpdate: true, autoGenerate: true, autoPlanOnOpen: true };
+
+ipcMain.handle('settings:get', () => Object.assign({}, DEFAULT_SETTINGS, kvGet('settings') || {}));
+
+ipcMain.handle('settings:set', (ev, patch) => {
+  const cur = Object.assign({}, DEFAULT_SETTINGS, kvGet('settings') || {});
+  Object.keys(patch || {}).forEach((k) => {
+    if (k in DEFAULT_SETTINGS) cur[k] = !!patch[k];
+  });
+  kvSet('settings', cur);
+  return cur;
+});
+
+ipcMain.handle('app:info', () => ({
+  version: app.getVersion(),
+  packaged: app.isPackaged,
+  root: ROOT
+}));
 
 // Folder-drop task creation: resolve a dropped path to its directory + name.
 ipcMain.handle('path:dirInfo', (ev, p) => {
@@ -440,7 +561,8 @@ const EST_DEFAULTS = {
   replan: { inputTokens: 12000, outputTokens: 3000, costUsd: 0.20 },
   check: { inputTokens: 8000, outputTokens: 2000, costUsd: 0.05 },
   'task-replan': { inputTokens: 8000, outputTokens: 1500, costUsd: 0.04 },
-  'task-generate': { inputTokens: 6000, outputTokens: 1200, costUsd: 0.03 }
+  'task-generate': { inputTokens: 6000, outputTokens: 1200, costUsd: 0.03 },
+  'task-command': { inputTokens: 5000, outputTokens: 1200, costUsd: 0.03 }
 };
 
 function estimateRun(mode) {
@@ -458,7 +580,7 @@ function estimateRun(mode) {
     };
   }
   const d = EST_DEFAULTS[mode] || EST_DEFAULTS.check;
-  const durations = { full: 420, replan: 240, check: 90, 'task-replan': 100, 'task-generate': 90 };
+  const durations = { full: 420, replan: 240, check: 90, 'task-replan': 100, 'task-generate': 90, 'task-command': 80 };
   return {
     inputTokens: d.inputTokens, outputTokens: d.outputTokens, costUsd: d.costUsd,
     durationSec: durations[mode] || 120, source: 'default'
@@ -530,14 +652,14 @@ ipcMain.handle('ai:openContext', () => {
   const promptFiles = {
     full: 'prompt.md', replan: 'prompt-replan.md',
     check: 'prompt-check.md', 'task-replan': 'prompt-task-replan.md',
-    'task-generate': 'prompt-task-generate.md'
+    'task-generate': 'prompt-task-generate.md', 'task-command': 'prompt-task-command.md'
   };
   const pf = promptFiles[mode] || 'prompt-check.md';
   const parts = ['=== რეჟიმი: ' + mode + ' ===', ''];
   parts.push('=== PROMPT (' + pf + ') ===');
   try { parts.push(fs.readFileSync(path.join(ROOT, 'core', pf), 'utf8')); }
   catch (e) { parts.push('(ფაილი ვერ მოიძებნა)'); }
-  if (mode === 'check' || mode === 'task-replan' || mode === 'task-generate') {
+  if (mode !== 'full' && mode !== 'replan') {
     const digestName = runId ? `check-digest-${runId}.json` : 'check-digest.json';
     parts.push('', '=== ' + digestName + ' — ზუსტად ეს მიეწოდა AI-ს ===');
     try { parts.push(fs.readFileSync(path.join(ROOT, 'core', digestName), 'utf8')); }
@@ -570,9 +692,10 @@ ipcMain.handle('ai:status', () => Array.from(activeRuns.values()).map((r) => ({
 // taskId/replan/generate: which check-family flavor to run. Concurrent with
 // each other (capped at MAX_CONCURRENT_AI), always exclusive with the daily
 // pipeline (full/replan) since that rewrites kanban.json wholesale.
-function runCheck(taskId, replan, generate) {
+function runCheck(taskId, replan, generate, command) {
   if (pipelineRunning || activeRuns.size >= MAX_CONCURRENT_AI) return false;
-  const mode = generate ? 'task-generate' : (replan ? 'task-replan' : 'check');
+  const mode = command ? 'task-command'
+    : (generate ? 'task-generate' : (replan ? 'task-replan' : 'check'));
   const id = crypto.randomUUID().slice(0, 8);
   const args = [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
@@ -581,6 +704,7 @@ function runCheck(taskId, replan, generate) {
   if (taskId) args.push('-TaskId', taskId);
   if (replan) args.push('-Replan');
   if (generate) args.push('-Generate');
+  if (command) args.push('-Command');
   const ps = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
   const run = {
     id, mode, taskId: taskId || null, pid: ps.pid, startedAt: Date.now(),
@@ -710,6 +834,79 @@ function runPipeline(force) {
   });
 }
 
+/* ---------- auto-update (GitHub releases) ---------- */
+
+// electron-updater reads the publish block in package.json and the latest.yml
+// that electron-builder uploads with each release. Only a packaged build can
+// update itself, so in dev every entry point reports "dev" and does nothing.
+let autoUpdater = null;
+let updateState = { status: 'idle', version: null, message: '', percent: 0 };
+
+function sendUpdateState() {
+  if (win && !win.isDestroyed()) {
+    try { win.webContents.send('update:state', updateState); } catch (e) { /* window closing */ }
+  }
+}
+
+function setUpdateState(status, extra) {
+  updateState = Object.assign({ status, version: null, message: '', percent: 0 }, extra || {});
+  sendUpdateState();
+}
+
+function initUpdater() {
+  if (!app.isPackaged) { setUpdateState('dev', { message: 'განახლება მხოლოდ დაინსტალირებულ ვერსიაშია' }); return; }
+  try {
+    autoUpdater = require('electron-updater').autoUpdater;
+  } catch (e) {
+    setUpdateState('error', { message: 'electron-updater ვერ ჩაიტვირთა' });
+    return;
+  }
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('checking-for-update', () => setUpdateState('checking'));
+  autoUpdater.on('update-available', (info) => setUpdateState('downloading', { version: info && info.version }));
+  autoUpdater.on('update-not-available', () => setUpdateState('current', { version: app.getVersion() }));
+  autoUpdater.on('download-progress', (p) => setUpdateState('downloading', {
+    version: updateState.version, percent: Math.round((p && p.percent) || 0)
+  }));
+  autoUpdater.on('update-downloaded', (info) => setUpdateState('ready', { version: info && info.version, percent: 100 }));
+  autoUpdater.on('error', (err) => setUpdateState('error', { message: String((err && err.message) || err).slice(0, 300) }));
+}
+
+function checkForUpdates(manual) {
+  if (!autoUpdater) {
+    if (manual) sendUpdateState();
+    return false;
+  }
+  const settings = Object.assign({}, DEFAULT_SETTINGS, kvGet('settings') || {});
+  if (!manual && !settings.autoUpdate) return false;
+  autoUpdater.autoDownload = manual || settings.autoUpdate;
+  autoUpdater.checkForUpdates().catch((err) => {
+    setUpdateState('error', { message: String((err && err.message) || err).slice(0, 300) });
+  });
+  return true;
+}
+
+ipcMain.handle('update:check', () => checkForUpdates(true));
+ipcMain.handle('update:state', () => updateState);
+ipcMain.handle('update:install', () => {
+  if (!autoUpdater || updateState.status !== 'ready') return false;
+  // quitAndInstall closes every window itself; the app-quit handlers still run.
+  setImmediate(() => autoUpdater.quitAndInstall(false, true));
+  return true;
+});
+
+/* Daily trajectory pass: propose new tasks from the project registry once a
+   day. It used to be a button only, so on quiet days the board just aged. */
+function maybeDailyGenerate() {
+  const settings = Object.assign({}, DEFAULT_SETTINGS, kvGet('settings') || {});
+  if (!settings.autoGenerate) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if ((kvGet('lastGenerate') || {}).date === today) return;
+  kvSet('lastGenerate', { date: today });
+  runCheck('', false, true);
+}
+
 app.whenReady().then(() => {
   // Window first — Mongo connects in the background; IPC handlers fall back
   // to files until it's ready, so startup never waits on the database.
@@ -717,10 +914,20 @@ app.whenReady().then(() => {
   initDb();
   runPipeline();
   // Auto status check for kanban tasks every 5 hours.
-  setInterval(runCheck, 5 * 60 * 60 * 1000);
+  setInterval(() => runCheck('', false, false, false), 5 * 60 * 60 * 1000);
   // Background activity monitor (no AI): on startup and every 30 minutes.
   runMonitor();
   setInterval(runMonitor, 30 * 60 * 1000);
+  // Project registry (no AI): same cadence, slightly offset so the two scans
+  // don't fight over the disk on startup.
+  setTimeout(runDiscover, 20 * 1000);
+  setInterval(runDiscover, 30 * 60 * 1000);
+  // Auto-update: check shortly after launch, then every 6 hours.
+  initUpdater();
+  setTimeout(() => checkForUpdates(false), 30 * 1000);
+  setInterval(() => checkForUpdates(false), 6 * 60 * 60 * 1000);
+  // One trajectory pass per day, after the registry has been refreshed.
+  setTimeout(maybeDailyGenerate, 3 * 60 * 1000);
   // Reload when the pipeline (or anything else) rewrites the page file.
   fs.watchFile(PAGE, { interval: 5000 }, (curr, prev) => {
     if (curr.mtimeMs !== prev.mtimeMs && win && !win.isDestroyed()) win.reload();
