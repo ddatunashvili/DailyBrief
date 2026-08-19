@@ -31,6 +31,27 @@ function Get-ProjectDir([string]$dir) {
     return $dir
 }
 
+# Folders the user muted on the "ignored" page never produce an event, so they
+# stay out of analytics, out of the project registry and out of every digest.
+$ignoreDirs = @()
+$ignorePath = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core\ignore.json'
+if (Test-Path $ignorePath) {
+    try {
+        $ij = ([string](Get-Content $ignorePath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        $ignoreDirs = @($ij.dirs | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } | Where-Object { $_ })
+    } catch {}
+}
+
+function Is-Ignored([string]$path) {
+    $p = ([string]$path).Trim().ToLowerInvariant()
+    if (-not $p) { return $false }
+    $sep = [char]92
+    foreach ($d in $ignoreDirs) {
+        if ($p -eq $d -or $p.StartsWith($d + $sep, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
 $cutoff = (Get-Date).AddMinutes(-$WindowMinutes)
 $today  = Get-Date -Format 'yyyy-MM-dd'
 $file   = Join-Path $outDir "$today.jsonl"
@@ -38,7 +59,7 @@ $lines  = New-Object System.Collections.Generic.List[string]
 
 foreach ($root in $roots) {
     Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.LastWriteTime -gt $cutoff -and $_.FullName -notmatch $exclude } |
+        Where-Object { $_.LastWriteTime -gt $cutoff -and $_.FullName -notmatch $exclude -and -not (Is-Ignored $_.DirectoryName) } |
         Select-Object -First 500 |
         ForEach-Object {
             $proj = Get-ProjectDir $_.DirectoryName

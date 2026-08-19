@@ -37,6 +37,21 @@ contextBridge.exposeInMainWorld('dailybrief', {
   projectsRefresh: () => ipcRenderer.invoke('projects:refresh'),
   projectsOpen: (dir) => ipcRenderer.invoke('projects:open', dir),
   onProjectsUpdated: (cb) => ipcRenderer.on('projects:updated', () => cb()),
+  // Ask page: free-text questions about the project registry.
+  askLoad: () => ipcRenderer.invoke('ask:load'),
+  askSend: (text, dir) => ipcRenderer.invoke('ask:send', text, dir),
+  askClear: () => ipcRenderer.invoke('ask:clear'),
+  onAskUpdated: (cb) => ipcRenderer.on('ask:updated', () => cb()),
+  // Per-project feature suggestions (3 at a time, accept or decline).
+  ideasLoad: () => ipcRenderer.invoke('ideas:load'),
+  ideasGenerate: (dir) => ipcRenderer.invoke('ideas:generate', dir),
+  ideasDecide: (dir, ideaId, state, taskId) => ipcRenderer.invoke('ideas:decide', dir, ideaId, state, taskId),
+  onIdeasUpdated: (cb) => ipcRenderer.on('ideas:updated', () => cb()),
+  // Ignored folders: excluded from the monitor, the registry and every digest.
+  ignoreLoad: () => ipcRenderer.invoke('ignore:load'),
+  ignoreAdd: (dir) => ipcRenderer.invoke('ignore:add', dir),
+  ignoreRemove: (dir) => ipcRenderer.invoke('ignore:remove', dir),
+  ignoreSearch: (query) => ipcRenderer.invoke('ignore:search', query),
   // The AI's open questions and the user's answers to them.
   questionsLoad: () => ipcRenderer.invoke('questions:load'),
   questionsAnswer: (id, answer) => ipcRenderer.invoke('questions:answer', id, answer),

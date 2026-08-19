@@ -11,6 +11,9 @@ Built with [Claude Code](https://claude.com/claude-code).
 - **Daily briefing** — generated each morning by Claude (Sonnet) from activity snapshots, your kanban board, and its own previous state. One page, direct, no generic advice.
 - **Project registry** — `core/projects.json`, rebuilt every 30 minutes with no AI: what each project is, what moved in it, what is still open in it. Browsable on the Projects page; one click turns a project into a task.
 - **Trello-style kanban** — tasks created by you or by the AI. Drop a folder anywhere in the app to turn it into a task (with confirmation); the folder gets linked and a git-aware scanner baselines it. Tasks that arrive without a folder are auto-linked to the matching project, so they always have evidence to be judged against.
+- **Ask page** — a free-text question about your own projects ("which one is closest to done?", "where is my uncommitted code?", "should I go back to X?"), answered from the registry: commits, dirty files, TODOs, open tasks, goals. The project the question was asked from gets its full card; every other project stays a one-line summary, so a question costs ~5k input tokens. Answers may carry suggested tasks you can create with one click.
+- **Feature ideas per project** — 3 concrete feature suggestions for one project, each with an effort size and a checklist. Accept turns a suggestion into a task (folder linked, checklist filled); decline removes it and adds it to a per-project blocklist the model is given on every later run, so it is never proposed again. Cards refill by themselves once every suggestion has been decided and the project has actually moved since (new commit, different dirty count, more changed files) — max 3 projects a day, switchable in Settings.
+- **Ignored folders** — a page that searches your work roots and mutes any folder: it and everything under it disappears from the monitor, the registry, the analytics and every AI digest. Projects can also be muted straight from their card.
 - **Comments are commands** — a comment on a task ("plan it better", "this is done", "split this off") fires a small AI run scoped to that task and its project: the checklist gets rewritten, the status changes, a split-off task appears, and the AI answers you in the thread.
 - **Checklist on open** — opening a task that has no plan writes one automatically, once, from the project's real files and commits.
 - **Open questions** — when the AI needs a decision it can't derive, it asks on the briefing page and you answer inline; the answer outranks its own observations in the next run.
@@ -27,7 +30,8 @@ The design goal is minimal AI spend:
 
 - Scripts gather and compress everything into a small `check-digest.json`; the model reads only that and returns a tiny `check-patch.json`; scripts apply the patch. The model never touches large files.
 - The daily brief is written as a small JSON; a script splices it into the app page.
-- Quality-critical runs (daily brief, day replan) use Sonnet; mechanical runs (checks, task replans, publishing) use Haiku.
+- Quality-critical runs (daily brief, day replan, questions, feature ideas) use Sonnet; mechanical runs (checks, task replans, publishing) use Haiku.
+- Questions and idea runs are read-only: they never rewrite the board, so they run alongside everything else and never reload the page under you.
 - Idle checks short-circuit before spawning the model — zero tokens.
 - Every run is journaled (duration, tokens, cost) and future runs show a history-based estimate + ETA up front.
 
@@ -48,4 +52,4 @@ The design goal is minimal AI spend:
 
 ## Privacy
 
-The monitor and snapshots record directory paths, file names and timestamps. The project registry additionally extracts, locally: git branch/commit subjects/`git status`, the first 400 characters of `README.md`, the `package.json` description and dependency names, and TODO/FIXME lines from tracked source files. Only these extracts reach the model — your files are never opened by the AI itself, and nothing is sent anywhere but the model that writes your briefing. All personal data (briefings, board, analytics, registry, database) stays in `core/` and is git-ignored.
+The monitor and snapshots record directory paths, file names and timestamps. The project registry additionally extracts, locally: git branch/commit subjects/`git status`, the first 400 characters of `README.md`, the `package.json` description and dependency names, and TODO/FIXME lines from tracked source files. Only these extracts reach the model — your files are never opened by the AI itself, and nothing is sent anywhere but the model that writes your briefing. Ignored folders are excluded before anything is collected — the monitor never logs them and no digest can mention them. All personal data (briefings, board, analytics, registry, chat history, feature ideas, database) stays in `core/` and is git-ignored.

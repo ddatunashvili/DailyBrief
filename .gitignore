@@ -18,6 +18,11 @@ core/dirs.txt
 core/top-dirs.txt
 core/check-digest*.json
 core/check-patch*.json
+core/ask-digest*.json
+core/ask-out*.json
+core/ask-log.json
+core/ideas.json
+core/ignore.json
 core/kanban.json.pre-repair.bak
 core/ai-runs.jsonl
 core/projects.json

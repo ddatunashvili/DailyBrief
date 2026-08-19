@@ -36,6 +36,11 @@ const MONITOR_SCRIPT = path.join(ROOT, 'core', 'monitor.ps1');
 // dirty files, TODOs). Built by a script, read by every AI run and the UI.
 const DISCOVER_SCRIPT = path.join(ROOT, 'core', 'discover-projects.ps1');
 const PROJECTS_FILE = path.join(ROOT, 'core', 'projects.json');
+// Ask + ideas: two AI modes that only ever read the registry (core\ask.ps1).
+const ASK_SCRIPT = path.join(ROOT, 'core', 'ask.ps1');
+const ASK_LOG_FILE = path.join(ROOT, 'core', 'ask-log.json');
+const IDEAS_FILE = path.join(ROOT, 'core', 'ideas.json');
+const IGNORE_FILE = path.join(ROOT, 'core', 'ignore.json');
 const QUESTIONS_FILE = path.join(ROOT, 'core', 'questions.json');
 const ANALYTICS_DIR = path.join(ROOT, 'core', 'analytics');
 const SNAP_DIR = path.join(ROOT, 'core', 'snapshots');
@@ -436,10 +441,43 @@ function runDiscover() {
   return true;
 }
 
+/* Ignored folders: everything under one of these paths is invisible to the
+   whole app — the monitor stops logging it, the registry stops listing it,
+   and no digest can mention it. The scripts read core\ignore.json themselves;
+   this side also filters on read so muting takes effect immediately, without
+   waiting for the next 30-minute scan. */
+
+function readIgnore() {
+  const data = readJson(IGNORE_FILE);
+  const dirs = data && Array.isArray(data.dirs) ? data.dirs : [];
+  return dirs.map((d) => String(d || '').trim()).filter(Boolean);
+}
+
+function isIgnored(p, list) {
+  const t = String(p || '').trim().toLowerCase();
+  if (!t) return false;
+  return (list || readIgnore()).some((d) => {
+    const s = String(d).toLowerCase().replace(/\\+$/, '');
+    return t === s || t.startsWith(s + '\\');
+  });
+}
+
+function writeIgnore(dirs) {
+  const clean = [];
+  dirs.map((d) => String(d || '').trim().replace(/\\+$/, '')).forEach((d) => {
+    if (d && !clean.some((x) => x.toLowerCase() === d.toLowerCase())) clean.push(d);
+  });
+  const out = { dirs: clean.slice(0, 300), updatedAt: new Date().toISOString() };
+  try { fs.writeFileSync(IGNORE_FILE, JSON.stringify(out, null, 2), 'utf8'); } catch (e) {}
+  return out;
+}
+
 ipcMain.handle('projects:load', () => {
   const data = readJson(PROJECTS_FILE);
   if (!data || !Array.isArray(data.projects)) return { generatedAt: null, projects: [] };
-  return data;
+  const ig = readIgnore();
+  if (!ig.length) return data;
+  return { generatedAt: data.generatedAt, projects: data.projects.filter((p) => !isIgnored(p && p.dir, ig)) };
 });
 
 ipcMain.handle('projects:refresh', () => runDiscover());
@@ -450,6 +488,75 @@ ipcMain.handle('projects:open', (ev, dir) => {
   if (!p || !fs.existsSync(p)) return false;
   shell.openPath(p);
   return true;
+});
+
+/* Folder search for the ignore page: the same work roots the scripts walk,
+   two levels deep, plus whatever the registry already found (a repo can sit
+   deeper than two levels). Cached for a minute — the page searches on every
+   keystroke. */
+
+const SEARCH_ROOTS = [
+  ['OneDrive', 'Desktop'], ['OneDrive', 'Documents'], ['Desktop'], ['Documents'],
+  ['Downloads'], ['source'], ['projects']
+].map((parts) => path.join(process.env.USERPROFILE || '', ...parts));
+
+const SEARCH_SKIP = /node_modules|\\\.git($|\\)|AppData|\\Temp|\\\.vscode|__pycache__|\\\.venv|\\venv($|\\)|\\\.next|\\\.nuxt|\\\.output|\\\.turbo|\\\.cache|\\dist($|\\)|\\coverage($|\\)/i;
+
+let dirCache = { at: 0, dirs: [] };
+
+function listDirs(parent) {
+  try {
+    return fs.readdirSync(parent, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => path.join(parent, d.name));
+  } catch (e) {
+    return [];
+  }
+}
+
+function scanDirs() {
+  if (dirCache.dirs.length && Date.now() - dirCache.at < 60 * 1000) return dirCache.dirs;
+  const out = [];
+  const add = (p) => {
+    if (out.length >= 5000 || SEARCH_SKIP.test(p)) return;
+    if (!out.some((x) => x.toLowerCase() === p.toLowerCase())) out.push(p);
+  };
+  SEARCH_ROOTS.filter((r) => fs.existsSync(r)).forEach((root) => {
+    listDirs(root).forEach((d1) => {
+      add(d1);
+      listDirs(d1).forEach(add);
+    });
+  });
+  const reg = readJson(PROJECTS_FILE);
+  if (reg && Array.isArray(reg.projects)) reg.projects.forEach((p) => p && p.dir && add(String(p.dir)));
+  dirCache = { at: Date.now(), dirs: out };
+  return out;
+}
+
+ipcMain.handle('ignore:load', () => ({ dirs: readIgnore() }));
+
+ipcMain.handle('ignore:add', (ev, dir) => {
+  const p = String(dir || '').trim().replace(/\\+$/, '');
+  if (!p || p.length < 3) return { dirs: readIgnore() };
+  const next = writeIgnore(readIgnore().concat([p]));
+  // Registry and analytics filter on read, so the change is visible at once.
+  if (win && !win.isDestroyed()) { try { win.webContents.send('projects:updated'); } catch (e) {} }
+  return next;
+});
+
+ipcMain.handle('ignore:remove', (ev, dir) => {
+  const p = String(dir || '').trim().toLowerCase();
+  const next = writeIgnore(readIgnore().filter((d) => d.toLowerCase() !== p));
+  if (win && !win.isDestroyed()) { try { win.webContents.send('projects:updated'); } catch (e) {} }
+  return next;
+});
+
+ipcMain.handle('ignore:search', (ev, query) => {
+  const q = String(query || '').trim().toLowerCase();
+  const ig = readIgnore();
+  let dirs = scanDirs();
+  if (q) dirs = dirs.filter((d) => d.toLowerCase().includes(q));
+  return dirs.slice(0, 80).map((d) => ({ dir: d, ignored: isIgnored(d, ig) }));
 });
 
 /* Questions: the AI's open questions to the user. Without a place to answer
@@ -482,7 +589,7 @@ ipcMain.handle('questions:answer', (ev, id, answer) => {
 
 /* Settings: small key/value bag kept in the app database. */
 
-const DEFAULT_SETTINGS = { autoUpdate: true, autoGenerate: true, autoPlanOnOpen: true };
+const DEFAULT_SETTINGS = { autoUpdate: true, autoGenerate: true, autoPlanOnOpen: true, autoIdeas: true };
 
 ipcMain.handle('settings:get', () => Object.assign({}, DEFAULT_SETTINGS, kvGet('settings') || {}));
 
@@ -568,7 +675,11 @@ const EST_DEFAULTS = {
   check: { inputTokens: 8000, outputTokens: 2000, costUsd: 0.05 },
   'task-replan': { inputTokens: 8000, outputTokens: 1500, costUsd: 0.04 },
   'task-generate': { inputTokens: 6000, outputTokens: 1200, costUsd: 0.03 },
-  'task-command': { inputTokens: 5000, outputTokens: 1200, costUsd: 0.03 }
+  'task-command': { inputTokens: 5000, outputTokens: 1200, costUsd: 0.03 },
+  // Read-only runs: a question about the registry, and 3 feature ideas for
+  // one project. Both on sonnet — this is where a cheaper model shows.
+  ask: { inputTokens: 7000, outputTokens: 900, costUsd: 0.04 },
+  ideas: { inputTokens: 3000, outputTokens: 1300, costUsd: 0.03 }
 };
 
 function estimateRun(mode) {
@@ -586,7 +697,10 @@ function estimateRun(mode) {
     };
   }
   const d = EST_DEFAULTS[mode] || EST_DEFAULTS.check;
-  const durations = { full: 420, replan: 240, check: 90, 'task-replan': 100, 'task-generate': 90, 'task-command': 80 };
+  const durations = {
+    full: 420, replan: 240, check: 90, 'task-replan': 100,
+    'task-generate': 90, 'task-command': 80, ask: 70, ideas: 70
+  };
   return {
     inputTokens: d.inputTokens, outputTokens: d.outputTokens, costUsd: d.costUsd,
     durationSec: durations[mode] || 120, source: 'default'
@@ -658,7 +772,8 @@ ipcMain.handle('ai:openContext', () => {
   const promptFiles = {
     full: 'prompt.md', replan: 'prompt-replan.md',
     check: 'prompt-check.md', 'task-replan': 'prompt-task-replan.md',
-    'task-generate': 'prompt-task-generate.md', 'task-command': 'prompt-task-command.md'
+    'task-generate': 'prompt-task-generate.md', 'task-command': 'prompt-task-command.md',
+    ask: 'prompt-ask.md', ideas: 'prompt-ideas.md'
   };
   const pf = promptFiles[mode] || 'prompt-check.md';
   const parts = ['=== რეჟიმი: ' + mode + ' ===', ''];
@@ -666,7 +781,10 @@ ipcMain.handle('ai:openContext', () => {
   try { parts.push(fs.readFileSync(path.join(ROOT, 'core', pf), 'utf8')); }
   catch (e) { parts.push('(ფაილი ვერ მოიძებნა)'); }
   if (mode !== 'full' && mode !== 'replan') {
-    const digestName = runId ? `check-digest-${runId}.json` : 'check-digest.json';
+    // ask/ideas keep their own digest files so a question and a check that
+    // happen to share a run id can never overwrite each other.
+    const dPrefix = (mode === 'ask' || mode === 'ideas') ? 'ask-digest-' : 'check-digest-';
+    const digestName = runId ? `${dPrefix}${runId}.json` : 'check-digest.json';
     parts.push('', '=== ' + digestName + ' — ზუსტად ეს მიეწოდა AI-ს ===');
     try { parts.push(fs.readFileSync(path.join(ROOT, 'core', digestName), 'utf8')); }
     catch (e) { parts.push('(digest ჯერ არ არსებობს)'); }
@@ -730,6 +848,119 @@ function runCheck(taskId, replan, generate, command) {
   return true;
 }
 
+/* Ask + ideas (core\ask.ps1). Both are read-only: they never rewrite
+   kanban.json, so they may run alongside the daily pipeline, and they never
+   trigger a page reload — a reload mid-question would wipe whatever the user
+   is typing. The renderer gets an ask:updated / ideas:updated event instead
+   and repaints one list. */
+
+function runAsk(mode, dir) {
+  if (activeRuns.size >= MAX_CONCURRENT_AI) return false;
+  const id = crypto.randomUUID().slice(0, 8);
+  const args = [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+    '-File', ASK_SCRIPT, '-Mode', mode, '-RunId', id
+  ];
+  if (dir) args.push('-Dir', String(dir).slice(0, 500));
+  const ps = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
+  const run = {
+    id, mode, taskId: null, pid: ps.pid, startedAt: Date.now(),
+    logFile: path.join(ROOT, 'core', `ask-run-${id}.log`),
+    killed: false, exclusive: false, est: estimateRun(mode)
+  };
+  activeRuns.set(id, run);
+  broadcastAiStatus();
+  const finish = () => {
+    activeRuns.delete(id);
+    broadcastAiStatus();
+    if (win && !win.isDestroyed()) {
+      try { win.webContents.send(mode === 'ideas' ? 'ideas:updated' : 'ask:updated'); } catch (e) {}
+    }
+  };
+  ps.on('error', finish);
+  ps.on('exit', () => { recordRun(run); finish(); });
+  return true;
+}
+
+function readAskLog() {
+  const data = readJson(ASK_LOG_FILE);
+  return data && Array.isArray(data.messages) ? data.messages : [];
+}
+
+function writeAskLog(messages) {
+  try {
+    fs.writeFileSync(ASK_LOG_FILE, JSON.stringify({ messages: messages.slice(-60) }, null, 2), 'utf8');
+  } catch (e) { /* the thread is a convenience, never block the run on it */ }
+}
+
+ipcMain.handle('ask:load', () => readAskLog());
+
+// The question is written to the thread here, not passed as an argument:
+// PS 5.1 mangles quotes inside an argument, and the script reads the last
+// user message out of ask-log.json anyway.
+ipcMain.handle('ask:send', (ev, text, dir) => {
+  const q = String(text || '').trim().slice(0, 1000);
+  if (!q) return { messages: readAskLog(), started: false };
+  const messages = readAskLog();
+  messages.push({
+    id: 'q' + crypto.randomUUID().slice(0, 8),
+    by: 'user', at: new Date().toISOString(),
+    text: q, dir: String(dir || '')
+  });
+  writeAskLog(messages);
+  const started = runAsk('ask', dir ? String(dir) : '');
+  return { messages: readAskLog(), started };
+});
+
+ipcMain.handle('ask:clear', () => { writeAskLog([]); return true; });
+
+function readIdeas() {
+  const data = readJson(IDEAS_FILE);
+  return {
+    entries: data && Array.isArray(data.entries) ? data.entries : [],
+    declined: data && Array.isArray(data.declined) ? data.declined : []
+  };
+}
+
+function writeIdeas(store) {
+  try { fs.writeFileSync(IDEAS_FILE, JSON.stringify(store, null, 2), 'utf8'); } catch (e) {}
+}
+
+ipcMain.handle('ideas:load', () => {
+  const store = readIdeas();
+  const ig = readIgnore();
+  return { entries: store.entries.filter((e) => !isIgnored(e && e.dir, ig)), declined: store.declined };
+});
+
+ipcMain.handle('ideas:generate', (ev, dir) => (dir ? runAsk('ideas', String(dir)) : false));
+
+/* Accept -> the renderer has already created the task and passes its id back,
+   so the card can show which suggestion became which task. Decline -> the
+   idea leaves the card and joins the declined list, which every later ideas
+   run reads: the model is told never to propose it again. */
+ipcMain.handle('ideas:decide', (ev, dir, ideaId, state, taskId) => {
+  const store = readIdeas();
+  const d = String(dir || '').toLowerCase();
+  const id = String(ideaId || '');
+  const accepted = state === 'accepted';
+  const at = new Date().toISOString();
+  store.entries.forEach((e) => {
+    if (String((e && e.dir) || '').toLowerCase() !== d) return;
+    const ideas = Array.isArray(e.ideas) ? e.ideas : [];
+    ideas.forEach((i) => {
+      if (!i || String(i.id) !== id) return;
+      i.state = accepted ? 'accepted' : 'declined';
+      i.taskId = accepted ? String(taskId || '') : '';
+      i.decidedAt = at;
+      if (!accepted) store.declined.push({ dir: e.dir, title: String(i.title || ''), at });
+    });
+    if (!accepted) e.ideas = ideas.filter((i) => !i || String(i.id) !== id);
+  });
+  store.declined = store.declined.slice(-300);
+  writeIdeas(store);
+  return store;
+});
+
 /* Analytics: raw file-change events collected by core\monitor.ps1 (no AI)
    plus daily project scores from the activity snapshots. Aggregation happens
    in the renderer; this just reads the last 7 days. */
@@ -749,6 +980,7 @@ ipcMain.handle('analytics:data', () => {
   const days = last7Dates();
   const events = [];
   const seen = new Set();
+  const ig = readIgnore();
   days.forEach((date) => {
     const f = path.join(ANALYTICS_DIR, date + '.jsonl');
     if (!fs.existsSync(f)) return;
@@ -758,6 +990,7 @@ ipcMain.handle('analytics:data', () => {
       try {
         const e = JSON.parse(line);
         // Overlapping monitor windows re-log the same change: dedupe.
+        if (isIgnored(e.project, ig)) return;
         const key = (e.project || '') + '|' + (e.file || '') + '|' + (e.ts || '');
         if (seen.has(key)) return;
         seen.add(key);
@@ -771,7 +1004,9 @@ ipcMain.handle('analytics:data', () => {
     if (!fs.existsSync(f)) return;
     fs.readFileSync(f, 'utf8').split(/\r?\n/).forEach((line) => {
       const m = line.match(/^\s*([\d.,]+)\s+(.+)$/);
-      if (m) daily.push({ date, score: parseFloat(m[1].replace(',', '.')), project: m[2].trim() });
+      if (m && !isIgnored(m[2].trim(), ig)) {
+        daily.push({ date, score: parseFloat(m[1].replace(',', '.')), project: m[2].trim() });
+      }
     });
   });
   return { days, events, daily };
@@ -913,6 +1148,34 @@ function maybeDailyGenerate() {
   runCheck('', false, true);
 }
 
+/* Feature ideas age with the project. Once every suggestion on a card has
+   been accepted or declined AND the project has actually moved since it was
+   filled (new commit, different dirty count, more changed files), the card is
+   worth refilling. A card that still holds an undecided idea is left alone —
+   regenerating would throw away a suggestion the user has not seen yet.
+   Capped at 3 projects a day, spread out so they don't take the whole
+   concurrency pool. */
+function maybeRefreshIdeas() {
+  const settings = Object.assign({}, DEFAULT_SETTINGS, kvGet('settings') || {});
+  if (!settings.autoIdeas) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if ((kvGet('lastIdeas') || {}).date === today) return;
+  const reg = readJson(PROJECTS_FILE);
+  if (!reg || !Array.isArray(reg.projects)) return;
+  const ig = readIgnore();
+  const sig = (p) => `${p.lastCommitAt || ''}|${p.dirtyCount || 0}|${p.changed14d || 0}`;
+  const stale = readIdeas().entries.filter((e) => {
+    if (!e || !e.dir || isIgnored(e.dir, ig)) return false;
+    const ideas = Array.isArray(e.ideas) ? e.ideas : [];
+    if (ideas.some((i) => i && i.state === 'new')) return false;
+    const p = reg.projects.find((x) => String((x && x.dir) || '').toLowerCase() === String(e.dir).toLowerCase());
+    return !!p && sig(p) !== String(e.signature || '');
+  }).slice(0, 3);
+  if (!stale.length) return;
+  kvSet('lastIdeas', { date: today });
+  stale.forEach((e, i) => setTimeout(() => runAsk('ideas', e.dir), i * 90 * 1000));
+}
+
 app.whenReady().then(() => {
   // Window first — Mongo connects in the background; IPC handlers fall back
   // to files until it's ready, so startup never waits on the database.
@@ -934,6 +1197,8 @@ app.whenReady().then(() => {
   setInterval(() => checkForUpdates(false), 6 * 60 * 60 * 1000);
   // One trajectory pass per day, after the registry has been refreshed.
   setTimeout(maybeDailyGenerate, 3 * 60 * 1000);
+  // Refill the feature-idea cards of projects that moved since they were filled.
+  setTimeout(maybeRefreshIdeas, 6 * 60 * 1000);
   // Reload when the pipeline (or anything else) rewrites the page file.
   fs.watchFile(PAGE, { interval: 5000 }, (curr, prev) => {
     if (curr.mtimeMs !== prev.mtimeMs && win && !win.isDestroyed()) win.reload();

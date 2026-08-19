@@ -27,6 +27,29 @@ $roots = @(
 
 $skipRe = 'node_modules|\\\.git$|\\\.git\\|AppData|\\Temp|\\\.vscode|__pycache__|\\\.venv|\\venv|\\Recent|\$Recycle|\\\.next|\\\.nuxt|\\\.output|\\\.turbo|\\\.cache|\\dist|\\coverage|DailyBriefApp'
 
+# ---------- user-muted folders (the "ignored" page) ----------
+# A muted folder must not become a project and its file changes must not be
+# counted anywhere: old events for it are already on disk, so filtering has to
+# happen on read too, not only in the monitor that writes them.
+$ignoreDirs = @()
+$ignorePath = Join-Path $base 'ignore.json'
+if (Test-Path $ignorePath) {
+    try {
+        $ij = ([string](Get-Content $ignorePath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        $ignoreDirs = @($ij.dirs | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } | Where-Object { $_ })
+    } catch {}
+}
+
+function Is-Ignored([string]$path) {
+    $p = ([string]$path).Trim().ToLowerInvariant()
+    if (-not $p) { return $false }
+    $sep = [char]92
+    foreach ($d in $ignoreDirs) {
+        if ($p -eq $d -or $p.StartsWith($d + $sep, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
 # ---------- activity from the monitor's event log ----------
 $events = @()
 # The monitor's windows overlap by design, so the same change is logged many
@@ -39,6 +62,7 @@ for ($i = 0; $i -lt $ActiveDays; $i++) {
             if ($_.Trim()) {
                 try {
                     $e = $_ | ConvertFrom-Json
+                    if (Is-Ignored ([string]$e.project)) { return }
                     $key = [string]$e.project + '|' + [string]$e.file + '|' + [string]$e.ts
                     if ($seen.Add($key)) { $events += $e }
                 } catch {}
@@ -88,7 +112,7 @@ foreach ($c in @($candidates | Select-Object -Unique)) {
     }
     $normalized.Add($c)
 }
-$candidates = @($normalized | Select-Object -Unique | Where-Object { $roots -notcontains $_ })
+$candidates = @($normalized | Select-Object -Unique | Where-Object { $roots -notcontains $_ -and -not (Is-Ignored $_) })
 # A plain folder that merely CONTAINS a project is not itself a project
 # (DB_BACKUPS-master wrapping renode-panel-backups). Git roots survive: a
 # nested repo is genuinely its own project.

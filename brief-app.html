@@ -471,6 +471,77 @@
   .kb-archive { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
   .kb-archive-item { font-size: 0.82rem; color: var(--muted); padding: 0.25rem 0; }
   .kb-archive-item .at { font-size: 0.68rem; margin-left: 0.4rem; }
+
+  /* projects page */
+  .pj-card { border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+             padding: 0.75rem 0.9rem; margin-bottom: 0.7rem; }
+  .pj-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+  .pj-name { font-weight: 700; font-size: 0.98rem; }
+  .pj-dir { color: var(--muted); font-size: 0.72rem; word-break: break-all; }
+  .pj-chips { display: flex; gap: 0.3rem; flex-wrap: wrap; margin: 0.4rem 0; }
+  .pj-chip { font-size: 0.68rem; border: 1px solid var(--border); border-radius: 999px;
+             padding: 0.1rem 0.5rem; color: var(--muted); }
+  .pj-chip.hot { color: #ffd28a; border-color: #6b5323; }
+  .pj-lines { font-size: 0.8rem; color: var(--muted); display: flex; flex-direction: column; gap: 0.15rem; }
+  .pj-lines code { font-size: 0.74rem; }
+  .pj-acts { margin-top: 0.5rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+
+  /* ask page */
+  .ask-thread { display: flex; flex-direction: column; gap: 0.6rem; }
+  .ask-msg { border: 1px solid var(--border); border-radius: 12px; padding: 0.6rem 0.8rem;
+             background: var(--surface); }
+  .ask-msg.user { border-color: var(--accent); background: var(--accent-soft); }
+  .ask-by { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.25rem; }
+  .ask-text { font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap; }
+  .ask-refs { font-size: 0.72rem; color: var(--muted); margin-top: 0.35rem; word-break: break-all; }
+  .ask-row { display: flex; gap: 0.4rem; align-items: flex-start; }
+  .ask-row textarea { flex: 1; min-height: 64px; resize: vertical; font: inherit;
+                      background: var(--surface); color: var(--text); border: 1px solid var(--border);
+                      border-radius: 10px; padding: 0.5rem 0.6rem; }
+  .ask-chips { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.7rem; }
+  .ask-chip { font-size: 0.72rem; border: 1px solid var(--border); border-radius: 999px;
+              padding: 0.2rem 0.6rem; color: var(--muted); background: transparent; cursor: pointer; }
+  .ask-chip:hover { color: var(--text); border-color: var(--accent); }
+  .ask-focus { font-size: 0.74rem; color: var(--muted); margin-bottom: 0.45rem; }
+  .ask-pending { font-size: 0.8rem; color: var(--muted); }
+
+  /* feature ideas on a project card */
+  .idea { border-top: 1px solid var(--border); padding-top: 0.5rem; margin-top: 0.5rem; }
+  .idea.accepted { opacity: 0.6; }
+  .idea-title { font-size: 0.88rem; font-weight: 600; }
+  .idea-eff { font-size: 0.66rem; border: 1px solid var(--border); border-radius: 999px;
+              padding: 0.02rem 0.4rem; color: var(--muted); margin-left: 0.35rem; }
+  .idea-desc { font-size: 0.8rem; margin-top: 0.2rem; }
+  .idea-why, .idea-subs { font-size: 0.76rem; color: var(--muted); margin-top: 0.2rem; }
+  .idea-acts { display: flex; gap: 0.35rem; margin-top: 0.45rem; }
+  .idea-head { font-size: 0.74rem; color: var(--muted); margin-top: 0.7rem; }
+
+  /* ignored folders */
+  .ig-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.42rem 0;
+            border-bottom: 1px solid var(--border); font-size: 0.82rem; }
+  .ig-row:last-child { border-bottom: 0; }
+  .ig-path { flex: 1; word-break: break-all; color: var(--muted); }
+  .ig-path.on { color: var(--text); }
+  .ig-search { width: 100%; box-sizing: border-box; font: inherit; background: var(--surface);
+               color: var(--text); border: 1px solid var(--border); border-radius: 10px;
+               padding: 0.5rem 0.6rem; }
+
+  /* AI questions */
+  .q-box { border: 1px solid #6b5323; background: #241f14; border-radius: 12px; padding: 0.8rem 0.9rem; margin-bottom: 1rem; }
+  .q-title { font-weight: 700; font-size: 0.85rem; margin-bottom: 0.5rem; color: #ffd28a; }
+  .q-item { border-top: 1px solid var(--border); padding-top: 0.5rem; margin-top: 0.5rem; }
+  .q-item:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+  .q-text { font-size: 0.88rem; margin-bottom: 0.35rem; }
+  .q-row { display: flex; gap: 0.4rem; }
+  .q-row input { flex: 1; }
+  .q-answered { font-size: 0.78rem; color: var(--muted); }
+
+  /* settings */
+  .set-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0;
+             border-bottom: 1px solid var(--border); font-size: 0.88rem; }
+  .set-row:last-child { border-bottom: 0; }
+  .set-row .hint { color: var(--muted); font-size: 0.74rem; }
+  .set-status { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.6rem; }
 </style>
 </head>
 <body>
@@ -480,22 +551,90 @@
     <div class="nav">
       <button id="nav-brief" class="nav-btn active">ბრიფინგი</button>
       <button id="nav-kanban" class="nav-btn">კანბანი</button>
+      <button id="nav-projects" class="nav-btn">პროექტები</button>
+      <button id="nav-ask" class="nav-btn">კითხვა</button>
       <button id="nav-archive" class="nav-btn">არქივი</button>
       <button id="nav-analytics" class="nav-btn">ანალიტიკა</button>
       <button id="nav-ai" class="nav-btn">AI</button>
+      <button id="nav-ignore" class="nav-btn">იგნორი</button>
+      <button id="nav-settings" class="nav-btn">პარამეტრები</button>
     </div>
     <div class="side-head" id="history-head">ისტორია</div>
     <nav id="day-list"></nav>
   </aside>
   <div class="main">
+    <div class="wrap" id="questions-wrap" hidden><div id="questions-box"></div></div>
     <div class="wrap" id="content"></div>
+    <div class="analytics-wrap" id="projects-view" hidden>
+      <header>
+        <p class="eyebrow">DailyBrief</p>
+        <h1>პროექტები</h1>
+        <p class="an-sub" id="projects-sub">რას მუშაობ სინამდვილეში — commit-ები, დაუკომიტებელი ფაილები, კოდში დარჩენილი TODO-ები</p>
+      </header>
+      <div style="margin-bottom:0.9rem;">
+        <button class="kb-btn ghost" id="projects-refresh" title="ხელახლა დაასკანერებს სამუშაო ფოლდერებს (AI-ის გარეშე)">განახლება</button>
+      </div>
+      <div id="projects-list"></div>
+    </div>
+    <div class="analytics-wrap" id="ask-view" hidden>
+      <header>
+        <p class="eyebrow">DailyBrief</p>
+        <h1>კითხვა</h1>
+        <p class="an-sub">ჰკითხე AI-ს შენივე პროექტებზე — პასუხობს რეესტრიდან: commit-ები, დაუკომიტებელი ფაილები, TODO-ები, ღია ტასკები</p>
+      </header>
+      <div class="ask-chips" id="ask-presets"></div>
+      <div class="ask-focus" id="ask-focus" hidden></div>
+      <div class="ask-focus" id="ask-note" hidden></div>
+      <div class="ask-row">
+        <textarea id="ask-input" placeholder="მაგ: რომელი სამი პროექტია ყველაზე ახლოს დასრულებასთან?"></textarea>
+        <button class="kb-btn" id="ask-send">კითხვა</button>
+      </div>
+      <div style="margin:0.55rem 0 1rem;">
+        <button class="kb-btn ghost" id="ask-clear" title="ჩატის ისტორია იშლება; პროექტების რეესტრს არაფერი ემართება">ისტორიის გასუფთავება</button>
+      </div>
+      <div class="ask-thread" id="ask-thread"></div>
+    </div>
+    <div class="analytics-wrap" id="ignore-view" hidden>
+      <header>
+        <p class="eyebrow">DailyBrief</p>
+        <h1>იგნორირებული ფოლდერები</h1>
+        <p class="an-sub">დამატებული ფოლდერი და მისი ქვეფოლდერები აღარ ითვლება: არც ანალიტიკაში, არც პროექტებში, არც AI-ის კონტექსტში</p>
+      </header>
+      <section class="an-section">
+        <h2>ძებნა და დამატება</h2>
+        <input class="ig-search" id="ig-search" placeholder="ფოლდერის სახელი ან გზა — მაგ: backups" />
+        <div style="margin-top:0.5rem;">
+          <button class="kb-btn ghost" id="ig-pick">ფოლდერის არჩევა…</button>
+        </div>
+        <div id="ig-results" style="margin-top:0.6rem;"></div>
+      </section>
+      <section class="an-section">
+        <h2>იგნორირებულია (<span id="ig-count">0</span>)</h2>
+        <div id="ig-list"></div>
+      </section>
+    </div>
+    <div class="analytics-wrap" id="settings-view" hidden>
+      <header>
+        <p class="eyebrow">DailyBrief</p>
+        <h1>პარამეტრები</h1>
+        <p class="an-sub" id="settings-sub"></p>
+      </header>
+      <section class="an-section">
+        <h2>განახლება</h2>
+        <div id="update-box"></div>
+      </section>
+      <section class="an-section">
+        <h2>ავტომატიზაცია</h2>
+        <div id="settings-toggles"></div>
+      </section>
+    </div>
     <div class="kanban-wrap" id="kanban-view" hidden>
       <div class="kb-head">
         <h1>კანბანი</h1>
         <div class="kb-actions">
           <button class="kb-btn" id="kb-check" title="AI შეამოწმებს რა შეიცვალა დირექტორიებში და თითო ტასკს მიუწერს ცვლილებებს">მიმდინარეს შემოწმება</button>
           <button class="kb-btn" id="kb-replan" title="AI სამომავლო გეგმას გადააწყობს შესრულებული/შექმნილი ტასკებისა და სტატუსების მიხედვით">სამომავლო გადაგეგმვა</button>
-          <button class="kb-btn" id="kb-generate" title="AI შემოგთავაზებს ახალ ტასკებს საერთო მიმართულების მიხედვით (GOALS/STATE/PROGRESS) — არა ბოლო აქტივობით">ტასკების გენერაცია</button>
+          <button class="kb-btn" id="kb-generate" title="AI პროექტების რეესტრიდან (commit-ები, დაუკომიტებელი ფაილები, TODO-ები) შემოგთავაზებს ახალ ტასკებს — ფოლდერით და ჩეკლისტით">ტასკების გენერაცია</button>
         </div>
       </div>
       <div class="board" id="board"></div>
@@ -1037,9 +1176,21 @@ const BRIEF = {
       addRow.querySelector("button").addEventListener("click", addSub);
       addIn.addEventListener("keydown", function (ev) { if (ev.key === "Enter") addSub(); });
       stBox.appendChild(addRow);
+      // A task opened without a plan gets one automatically — see ensurePlan.
+      if (!(t.subtasks || []).length && t.planRequested) {
+        stBox.insertBefore(el("div", "kb-st-row", '<span class="kb-st-text">AI ადგენს ჩეკლისტს… ფანჯარა თავად განახლდება</span>'), stBox.firstChild);
+      }
     }
     paintSubtasks();
     m.appendChild(stBox);
+
+    // First open of a planless task triggers one replan run; main.js keeps the
+    // flag so reopening never spends tokens twice.
+    if (api && api.ensurePlan && !t.done && !(t.subtasks || []).length && !t.planRequested) {
+      api.ensurePlan(t.id).then(function (started) {
+        if (started) { t.planRequested = true; paintSubtasks(); }
+      }).catch(function () {});
+    }
 
     /* linked folders: the AI check watches these paths first */
     m.appendChild(el("div", "kb-m-h", "დაკავშირებული ფოლდერები — AI ამ გზებს დააკვირდება"));
@@ -1091,19 +1242,24 @@ const BRIEF = {
     m.appendChild(el("div", "kb-m-h", "კომენტარები"));
     var cbox = el("div", "kb-m-comments");
     (t.comments || []).forEach(function (c) {
+      // A user comment is an order: it stays marked "pending" until the AI run
+      // it triggered has rewritten the task.
+      var pending = c.by === "user" && c.state === "new";
       cbox.appendChild(el("div", "kb-comment",
         '<span class="by">' + (c.by === "ai" ? "AI" : "შენ") + '</span>' + md(c.text) +
-        ' <span class="at">' + md(shortAt(c.at)) + '</span>'));
+        ' <span class="at">' + md(shortAt(c.at)) + '</span>' +
+        (pending ? ' <span class="at">· AI ასრულებს…</span>' : "")));
     });
     m.appendChild(cbox);
     var cin = el("div", "kb-cin",
-      '<input type="text" placeholder="დაწერე კომენტარი…" maxlength="1000"><button>დამატება</button>');
+      '<input type="text" placeholder="დაწერე ბრძანება: „უკეთესად დაგეგმე“, „ეს გაკეთდა“…" maxlength="1000"><button>დამატება</button>');
     var cIn = cin.querySelector("input");
     function addComment() {
       var txt = cIn.value.trim();
       if (!txt) return;
       t.comments = t.comments || [];
-      t.comments.push({ by: "user", text: txt, at: nowISO() });
+      // state:"new" is what makes main.js fire the command run on save.
+      t.comments.push({ by: "user", text: txt, at: nowISO(), state: "new" });
       t.updatedAt = nowISO();
       saveKb(); renderKanban(); openModal(id);
     }
@@ -1564,18 +1720,27 @@ const BRIEF = {
   var navButtons = {
     brief: document.getElementById("nav-brief"),
     kanban: document.getElementById("nav-kanban"),
+    projects: document.getElementById("nav-projects"),
+    ask: document.getElementById("nav-ask"),
     archive: document.getElementById("nav-archive"),
     analytics: document.getElementById("nav-analytics"),
-    ai: document.getElementById("nav-ai")
+    ai: document.getElementById("nav-ai"),
+    ignore: document.getElementById("nav-ignore"),
+    settings: document.getElementById("nav-settings")
   };
   var kanbanView = document.getElementById("kanban-view");
   var views = {
     brief: content,
     kanban: kanbanView,
+    projects: document.getElementById("projects-view"),
+    ask: document.getElementById("ask-view"),
     archive: document.getElementById("archive-view"),
     analytics: document.getElementById("analytics-view"),
-    ai: document.getElementById("ai-view")
+    ai: document.getElementById("ai-view"),
+    ignore: document.getElementById("ignore-view"),
+    settings: document.getElementById("settings-view")
   };
+  var questionsWrap = document.getElementById("questions-wrap");
   var historyHead = document.getElementById("history-head");
 
   function showView(name) {
@@ -1590,23 +1755,586 @@ const BRIEF = {
     // Remember the view: the page reloads after every AI/pipeline run and
     // must come back to the same place, not jump to the briefing.
     try { localStorage.setItem("dailybrief-view", name); } catch (e) {}
+    // The AI's open questions belong to the briefing view: that's where the
+    // user reads what it concluded and where an answer changes tomorrow's plan.
+    questionsWrap.hidden = name !== "brief" || !questionsWrap.dataset.has;
     if (name === "archive") renderArchivePage();
     if (name === "analytics") loadAnalytics();
     if (name === "ai") renderAiPage();
+    if (name === "projects") renderProjectsPage();
+    if (name === "ask") renderAskPage();
+    if (name === "ignore") renderIgnorePage();
+    if (name === "settings") renderSettingsPage();
   }
   Object.keys(navButtons).forEach(function (k) {
     navButtons[k].addEventListener("click", function () { showView(k); });
   });
 
+  /* ---- projects page ---- */
+
+  // PS 5.1 serializes an empty array inside an object as {} and a one-item
+  // array as a bare value — normalize both before touching them as lists.
+  function arr(v) {
+    if (Array.isArray(v)) return v;
+    if (v === null || v === undefined || v === "") return [];
+    if (typeof v === "object") return Object.keys(v).length ? [v] : [];
+    return [v];
+  }
+
+  var projectsCache = { generatedAt: null, projects: [] };
+  var ideasCache = { entries: [], declined: [] };
+
+  function ideaEntry(dir) {
+    var d = String(dir || "").toLowerCase();
+    return arr(ideasCache.entries).filter(function (e) {
+      return String((e && e.dir) || "").toLowerCase() === d;
+    })[0] || null;
+  }
+
+  // An accepted idea becomes a normal task: same folder, and the AI's steps
+  // arrive as the checklist, so the auto-planner has nothing left to write.
+  async function acceptIdea(p, idea) {
+    var desc = String(idea.desc || "");
+    if (idea.why) desc += (desc ? "\n\n" : "") + idea.why;
+    var t = {
+      id: newTaskId(), title: String(idea.title || ""), desc: desc,
+      status: "planning", done: false, createdBy: "ai",
+      createdAt: nowISO(), updatedAt: nowISO(), comments: [], aiNotes: [],
+      dirs: [p.dir],
+      subtasks: arr(idea.subtasks).map(function (s) { return { text: String(s), done: false }; }),
+      planRequested: true
+    };
+    kb.tasks.push(t);
+    saveKb();
+    if (api && api.scanFolder) api.scanFolder(t.id, p.dir);
+    ideasCache = await api.ideasDecide(p.dir, idea.id, "accepted", t.id);
+    renderKanban();
+    renderProjectsPage();
+  }
+
+  async function declineIdea(p, idea) {
+    ideasCache = await api.ideasDecide(p.dir, idea.id, "declined", "");
+    renderProjectsPage();
+  }
+
+  function ideasBox(p, entry) {
+    var box = el("div", null);
+    var ideas = arr(entry.ideas);
+    box.appendChild(el("div", "idea-head",
+      "AI-ის შემოთავაზებები · " + md(entry.generatedAt || "")));
+    if (!ideas.length) {
+      box.appendChild(el("div", "idea-why", "ყველა შემოთავაზება განხილულია — „ახალი იდეები“ ახლებს დაწერს."));
+      return box;
+    }
+    ideas.forEach(function (idea) {
+      var row = el("div", "idea" + (idea.state === "accepted" ? " accepted" : ""));
+      row.appendChild(el("div", "idea-title",
+        md(String(idea.title || "")) + (idea.effort ? '<span class="idea-eff">' + md(String(idea.effort)) + "</span>" : "")));
+      if (idea.desc) row.appendChild(el("div", "idea-desc", md(String(idea.desc))));
+      if (idea.why) row.appendChild(el("div", "idea-why", md(String(idea.why))));
+      var subs = arr(idea.subtasks);
+      if (subs.length) row.appendChild(el("div", "idea-subs", md(subs.map(String).join(" · "))));
+      if (idea.state === "accepted") {
+        row.appendChild(el("div", "idea-why", "მიღებულია — ტასკი შექმნილია."));
+      } else {
+        var acts = el("div", "idea-acts");
+        var yes = el("button", "kb-btn", "მიღება — ტასკად");
+        yes.addEventListener("click", function () { acceptIdea(p, idea); });
+        acts.appendChild(yes);
+        var no = el("button", "kb-btn ghost", "უარყოფა");
+        no.title = "აღარ შემოგთავაზებს — უარყოფილი იდეები ყოველ მომდევნო გაშვებაში ეგზავნება მოდელს, როგორც აკრძალული სია";
+        no.addEventListener("click", function () { declineIdea(p, idea); });
+        acts.appendChild(no);
+        row.appendChild(acts);
+      }
+      box.appendChild(row);
+    });
+    return box;
+  }
+
+  function projectCard(p) {
+    var entry = ideaEntry(p.dir);
+    var card = el("div", "pj-card");
+    var top = el("div", "pj-top");
+    top.appendChild(el("span", "pj-name", md(p.name || "")));
+    top.appendChild(el("span", "pj-dir", md(p.dir || "")));
+    card.appendChild(top);
+
+    var chips = el("div", "pj-chips");
+    arr(p.stack).slice(0, 6).forEach(function (s) { chips.appendChild(el("span", "pj-chip", md(String(s)))); });
+    if (p.isGit) chips.appendChild(el("span", "pj-chip", "git · " + md(p.branch || "")));
+    if (p.dirtyCount) chips.appendChild(el("span", "pj-chip hot", md(p.dirtyCount + " დაუკომიტებელი")));
+    if (p.todoCount) chips.appendChild(el("span", "pj-chip", "TODO " + p.todoCount));
+    if (p.changed14d) chips.appendChild(el("span", "pj-chip", p.changed14d + " ცვლილება / 14დღე"));
+    card.appendChild(chips);
+
+    var lines = el("div", "pj-lines");
+    var desc = p.pkgDesc || p.readme;
+    if (desc) lines.appendChild(el("div", null, md(String(desc).slice(0, 180))));
+    var commits = arr(p.lastCommits);
+    if (commits.length) lines.appendChild(el("div", null, "ბოლო: <code>" + md(String(commits[0])) + "</code>"));
+    var dirty = arr(p.dirtySample);
+    if (dirty.length) lines.appendChild(el("div", null, "დაუკომიტებელი: <code>" + md(dirty.slice(0, 3).map(String).join(", ")) + "</code>"));
+    var todos = arr(p.todoSample);
+    if (todos.length) lines.appendChild(el("div", null, "TODO: <code>" + md(String(todos[0])) + "</code>"));
+    card.appendChild(lines);
+
+    // Tasks already watching this folder — the link between the two pages.
+    var linked = (kb.tasks || []).filter(function (t) {
+      return !t.done && (t.dirs || []).some(function (d) { return d === p.dir; });
+    });
+    if (linked.length) {
+      card.appendChild(el("div", "pj-lines", "ტასკები: " + md(linked.map(function (t) { return t.title; }).join(" · "))));
+    }
+
+    var acts = el("div", "pj-acts");
+    var openBtn = el("button", "kb-btn ghost", "ფოლდერის გახსნა");
+    openBtn.addEventListener("click", function () { if (api && api.projectsOpen) api.projectsOpen(p.dir); });
+    acts.appendChild(openBtn);
+    var taskBtn = el("button", "kb-btn", "ტასკის შექმნა");
+    taskBtn.addEventListener("click", function () {
+      var t = {
+        id: newTaskId(), title: p.name, desc: "", status: "planning", done: false,
+        createdBy: "user", createdAt: nowISO(), updatedAt: nowISO(),
+        comments: [], aiNotes: [], dirs: [p.dir], subtasks: []
+      };
+      kb.tasks.push(t);
+      saveKb();
+      if (api && api.scanFolder) api.scanFolder(t.id, p.dir);
+      renderKanban();
+      showView("kanban");
+      openModal(t.id);
+    });
+    acts.appendChild(taskBtn);
+
+    if (api && api.askSend) {
+      // Ask with this project in focus: the run gets its full card (readme,
+      // commits, dirty files, TODOs) instead of the one-line summary.
+      var askBtn = el("button", "kb-btn ghost", "ჰკითხე ამაზე");
+      askBtn.addEventListener("click", function () {
+        setAskFocus(p.dir, p.name);
+        showView("ask");
+      });
+      acts.appendChild(askBtn);
+    }
+    if (api && api.ideasGenerate) {
+      var ideaBtn = el("button", "kb-btn ghost", entry ? "ახალი იდეები" : "იდეები (3)");
+      ideaBtn.title = "AI შემოგთავაზებს 3 ახალ ფუნქციას სწორედ ამ პროექტისთვის; მიღება ტასკს შექმნის, უარყოფა კი სამუდამოდ მოხსნის";
+      ideaBtn.addEventListener("click", async function () {
+        var label = ideaBtn.textContent;
+        ideaBtn.disabled = true;
+        ideaBtn.textContent = "იდეები იწერება…";
+        var started = await api.ideasGenerate(p.dir);
+        // Pool full: give the button back instead of spinning forever.
+        if (!started) { ideaBtn.disabled = false; ideaBtn.textContent = label; }
+      });
+      acts.appendChild(ideaBtn);
+    }
+    if (api && api.ignoreAdd) {
+      var igBtn = el("button", "kb-btn ghost", "იგნორი");
+      igBtn.title = "ეს ფოლდერი აღარსად ჩაითვლება — არც ანალიტიკაში, არც პროექტებში, არც AI-ის კონტექსტში";
+      igBtn.addEventListener("click", async function () {
+        if (!confirm(p.name + " იგნორში გადავიდეს? აღარ დაითვლება ანალიტიკაში, პროექტებში და AI-ის კონტექსტში.")) return;
+        await api.ignoreAdd(p.dir);
+        renderProjectsPage();
+      });
+      acts.appendChild(igBtn);
+    }
+
+    card.appendChild(acts);
+    if (entry) card.appendChild(ideasBox(p, entry));
+    return card;
+  }
+
+  async function renderProjectsPage() {
+    var list = document.getElementById("projects-list");
+    if (!api || !api.projectsLoad) {
+      list.innerHTML = '<div class="an-empty">პროექტების რეესტრი მხოლოდ აპში მუშაობს.</div>';
+      return;
+    }
+    if (!projectsCache.projects.length) list.innerHTML = '<div class="an-empty">იტვირთება…</div>';
+    projectsCache = (await api.projectsLoad()) || { generatedAt: null, projects: [] };
+    if (api.ideasLoad) ideasCache = (await api.ideasLoad()) || { entries: [], declined: [] };
+    var ps = arr(projectsCache.projects);
+    document.getElementById("projects-sub").textContent = ps.length
+      ? ps.length + " პროექტი · განახლდა " + (projectsCache.generatedAt || "—")
+      : "რეესტრი ჯერ არ აგებულა — დააჭირე „განახლებას“.";
+    list.innerHTML = "";
+    ps.forEach(function (p) { list.appendChild(projectCard(p)); });
+  }
+
+  var projectsRefreshBtn = document.getElementById("projects-refresh");
+  if (projectsRefreshBtn && api && api.projectsRefresh) {
+    projectsRefreshBtn.addEventListener("click", async function () {
+      projectsRefreshBtn.disabled = true;
+      projectsRefreshBtn.textContent = "სკანირება…";
+      await api.projectsRefresh();
+    });
+    try {
+      api.onProjectsUpdated(function () {
+        projectsRefreshBtn.disabled = false;
+        projectsRefreshBtn.textContent = "განახლება";
+        if (!views.projects.hidden) renderProjectsPage();
+      });
+    } catch (e) {}
+  }
+
+  if (api && api.onIdeasUpdated) {
+    try {
+      api.onIdeasUpdated(function () { if (!views.projects.hidden) renderProjectsPage(); });
+    } catch (e) {}
+  }
+
+  /* ---- ask page: free-text questions about the project registry ---- */
+
+  var ASK_PRESETS = [
+    "რა უნდა გავაკეთო დღეს?",
+    "რომელი პროექტია ყველაზე ახლოს დასრულებასთან?",
+    "სად მაქვს დაუკომიტებელი კოდი, რომელიც უნდა დავაკომიტო?",
+    "რომელი პროექტი მივატოვე და ღირს თუ არა დაბრუნება?",
+    "სად დამრჩა ყველაზე მეტი დაუმთავრებელი TODO?"
+  ];
+
+  var askFocus = { dir: "", name: "" };
+
+  function setAskFocus(dir, name) {
+    askFocus = { dir: dir || "", name: name || "" };
+    paintAskFocus();
+  }
+
+  function paintAskFocus() {
+    var box = document.getElementById("ask-focus");
+    if (!box) return;
+    box.hidden = !askFocus.dir;
+    if (!askFocus.dir) return;
+    box.innerHTML = "";
+    box.appendChild(el("span", null, "ფოკუსში: " + md(askFocus.name || askFocus.dir) + " — "));
+    var clear = el("button", "ask-chip", "მოხსნა");
+    clear.addEventListener("click", function () { setAskFocus("", ""); });
+    box.appendChild(clear);
+  }
+
+  function askMsgNode(m) {
+    var isUser = m.by === "user";
+    var node = el("div", "ask-msg" + (isUser ? " user" : ""));
+    node.appendChild(el("div", "ask-by", isUser ? "შენ" : "AI"));
+    node.appendChild(el("div", "ask-text", md(String(m.text || ""))));
+    var refs = arr(m.projects);
+    if (refs.length) node.appendChild(el("div", "ask-refs", md(refs.map(String).join(" · "))));
+    arr(m.suggestedTasks).forEach(function (s) {
+      var row = el("div", "idea");
+      row.appendChild(el("div", "idea-title", md(String(s.title || ""))));
+      if (s.desc) row.appendChild(el("div", "idea-desc", md(String(s.desc))));
+      var acts = el("div", "idea-acts");
+      var mk = el("button", "kb-btn", "ტასკის შექმნა");
+      mk.addEventListener("click", function () {
+        var t = {
+          id: newTaskId(), title: String(s.title || ""), desc: String(s.desc || ""),
+          status: "planning", done: false, createdBy: "ai",
+          createdAt: nowISO(), updatedAt: nowISO(), comments: [], aiNotes: [],
+          dirs: s.dir ? [String(s.dir)] : [], subtasks: []
+        };
+        kb.tasks.push(t);
+        saveKb();
+        if (s.dir && api && api.scanFolder) api.scanFolder(t.id, String(s.dir));
+        renderKanban();
+        showView("kanban");
+        openModal(t.id);
+      });
+      acts.appendChild(mk);
+      row.appendChild(acts);
+      node.appendChild(row);
+    });
+    return node;
+  }
+
+  async function renderAskPage() {
+    var thread = document.getElementById("ask-thread");
+    if (!api || !api.askLoad) {
+      thread.innerHTML = '<div class="an-empty">კითხვა მხოლოდ აპში მუშაობს.</div>';
+      return;
+    }
+    var presets = document.getElementById("ask-presets");
+    if (presets && !presets.childElementCount) {
+      ASK_PRESETS.forEach(function (q) {
+        var chip = el("button", "ask-chip", md(q));
+        chip.addEventListener("click", function () {
+          document.getElementById("ask-input").value = q;
+          sendAsk();
+        });
+        presets.appendChild(chip);
+      });
+    }
+    paintAskFocus();
+    var msgs = arr(await api.askLoad());
+    thread.innerHTML = "";
+    if (!msgs.length) {
+      thread.appendChild(el("div", "an-empty", "ჯერ არაფერი გიკითხავს. აირჩიე მზა კითხვა ან დაწერე შენი."));
+      return;
+    }
+    // Newest first: the answer you just waited for is at the top, not after
+    // scrolling through the whole history.
+    msgs.slice().reverse().forEach(function (m) { thread.appendChild(askMsgNode(m)); });
+    // The run is still in flight while the last message is the question.
+    if (msgs[msgs.length - 1].by === "user") {
+      thread.insertBefore(el("div", "ask-msg", '<div class="ask-pending">AI ფიქრობს… პასუხი აქვე გამოჩნდება.</div>'), thread.firstChild);
+    }
+  }
+
+  async function sendAsk() {
+    var input = document.getElementById("ask-input");
+    var btn = document.getElementById("ask-send");
+    var text = (input.value || "").trim();
+    if (!text || !api || !api.askSend) return;
+    btn.disabled = true;
+    input.value = "";
+    var res = await api.askSend(text, askFocus.dir);
+    btn.disabled = false;
+    // The AI pool is capped: say so instead of leaving a question that never
+    // gets an answer sitting in the thread.
+    askNote(res && res.started === false
+      ? "AI-ის ლიმიტი სავსეა — კითხვა ჩაწერილია, გაუშვი ხელახლა, როცა მიმდინარე პროცესები დასრულდება."
+      : "");
+    renderAskPage();
+  }
+
+  function askNote(text) {
+    var box = document.getElementById("ask-note");
+    if (!box) return;
+    box.hidden = !text;
+    box.innerHTML = text ? md(text) : "";
+  }
+
+  var askSendBtn = document.getElementById("ask-send");
+  if (askSendBtn) askSendBtn.addEventListener("click", sendAsk);
+  var askInput = document.getElementById("ask-input");
+  if (askInput) {
+    // Ctrl+Enter sends; plain Enter keeps writing (questions run long).
+    askInput.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); sendAsk(); }
+    });
+  }
+  var askClearBtn = document.getElementById("ask-clear");
+  if (askClearBtn && api && api.askClear) {
+    askClearBtn.addEventListener("click", async function () {
+      if (!confirm("ჩატის ისტორია წაიშალოს?")) return;
+      await api.askClear();
+      renderAskPage();
+    });
+  }
+  if (api && api.onAskUpdated) {
+    try {
+      api.onAskUpdated(function () { if (!views.ask.hidden) renderAskPage(); });
+    } catch (e) {}
+  }
+
+  /* ---- ignored folders ---- */
+
+  async function renderIgnorePage() {
+    var list = document.getElementById("ig-list");
+    if (!api || !api.ignoreLoad) {
+      list.innerHTML = '<div class="an-empty">იგნორის სია მხოლოდ აპში მუშაობს.</div>';
+      return;
+    }
+    var data = (await api.ignoreLoad()) || { dirs: [] };
+    var dirs = arr(data.dirs);
+    document.getElementById("ig-count").textContent = String(dirs.length);
+    list.innerHTML = "";
+    if (!dirs.length) {
+      list.appendChild(el("div", "an-empty", "ჯერ არცერთი ფოლდერი არ არის იგნორში."));
+    }
+    dirs.forEach(function (d) {
+      var row = el("div", "ig-row");
+      row.appendChild(el("div", "ig-path on", md(String(d))));
+      var rm = el("button", "kb-btn ghost", "დაბრუნება");
+      rm.addEventListener("click", async function () {
+        await api.ignoreRemove(String(d));
+        renderIgnorePage();
+        renderProjectsPage();
+      });
+      row.appendChild(rm);
+      list.appendChild(row);
+    });
+    await searchIgnoreDirs();
+  }
+
+  async function searchIgnoreDirs() {
+    var box = document.getElementById("ig-results");
+    if (!box || !api || !api.ignoreSearch) return;
+    var q = (document.getElementById("ig-search").value || "").trim();
+    var rows = arr(await api.ignoreSearch(q));
+    box.innerHTML = "";
+    if (!rows.length) {
+      box.appendChild(el("div", "an-empty", "ვერაფერი მოიძებნა."));
+      return;
+    }
+    rows.forEach(function (r) {
+      var row = el("div", "ig-row");
+      row.appendChild(el("div", "ig-path", md(String(r.dir))));
+      if (r.ignored) {
+        row.appendChild(el("div", "ig-path", "იგნორშია"));
+      } else {
+        var add = el("button", "kb-btn ghost", "იგნორი");
+        add.addEventListener("click", async function () {
+          await api.ignoreAdd(String(r.dir));
+          renderIgnorePage();
+        });
+        row.appendChild(add);
+      }
+      box.appendChild(row);
+    });
+  }
+
+  var igSearchInput = document.getElementById("ig-search");
+  if (igSearchInput) {
+    var igTimer = null;
+    igSearchInput.addEventListener("input", function () {
+      if (igTimer) clearTimeout(igTimer);
+      igTimer = setTimeout(searchIgnoreDirs, 200);
+    });
+  }
+  var igPickBtn = document.getElementById("ig-pick");
+  if (igPickBtn && api && api.pickFolder) {
+    igPickBtn.addEventListener("click", async function () {
+      var picked = await api.pickFolder();
+      if (!picked) return;
+      await api.ignoreAdd(picked);
+      renderIgnorePage();
+    });
+  }
+
+  /* ---- AI questions (the answer box that unblocks the planner) ---- */
+
+  async function renderQuestions() {
+    if (!api || !api.questionsLoad) return;
+    var qs = (await api.questionsLoad()).filter(function (q) { return !q.answer; });
+    var box = document.getElementById("questions-box");
+    box.innerHTML = "";
+    questionsWrap.dataset.has = qs.length ? "1" : "";
+    questionsWrap.hidden = !qs.length || views.brief.hidden;
+    if (!qs.length) return;
+    var wrap = el("div", "q-box");
+    wrap.appendChild(el("div", "q-title", "AI-ს კითხვები შენთან"));
+    qs.slice(0, 3).forEach(function (q) {
+      var item = el("div", "q-item");
+      item.appendChild(el("div", "q-text", md(q.text)));
+      var row = el("div", "q-row");
+      var inp = document.createElement("input");
+      inp.className = "kb-input";
+      inp.placeholder = "პასუხი…";
+      var btn = el("button", "kb-btn", "პასუხი");
+      async function send() {
+        var v = inp.value.trim();
+        if (!v) return;
+        btn.disabled = true;
+        await api.questionsAnswer(q.id, v);
+        item.innerHTML = '<div class="q-answered">' + md(q.text) + " — პასუხი შენახულია, შემდეგ ბრიფინგში გაითვალისწინება.</div>";
+      }
+      btn.addEventListener("click", send);
+      inp.addEventListener("keydown", function (ev) { if (ev.key === "Enter") send(); });
+      row.appendChild(inp);
+      row.appendChild(btn);
+      item.appendChild(row);
+      wrap.appendChild(item);
+    });
+    box.appendChild(wrap);
+  }
+
+  /* ---- settings ---- */
+
+  var updateStateCache = { status: "idle", version: null, message: "", percent: 0 };
+
+  var UPDATE_TEXT = {
+    idle: "შემოწმება არ განხორციელებულა.",
+    checking: "მოწმდება…",
+    current: "უახლესი ვერსია გიდგას.",
+    downloading: "ახალი ვერსია იწერება…",
+    ready: "ახალი ვერსია ჩამოიწერა — გადატვირთვისთვის მზადაა.",
+    error: "შეცდომა განახლებისას.",
+    dev: "განახლება მხოლოდ დაინსტალირებულ ვერსიაში მუშაობს."
+  };
+
+  function paintUpdateBox() {
+    var box = document.getElementById("update-box");
+    if (!box || views.settings.hidden) return;
+    box.innerHTML = "";
+    var s = updateStateCache || {};
+    var txt = UPDATE_TEXT[s.status] || UPDATE_TEXT.idle;
+    if (s.status === "downloading" && s.percent) txt += " " + s.percent + "%";
+    if (s.version && (s.status === "ready" || s.status === "downloading")) txt += " (v" + s.version + ")";
+    if (s.status === "error" && s.message) txt += " " + s.message;
+    box.appendChild(el("div", "set-status", md(txt)));
+    var checkBtn = el("button", "kb-btn", "განახლების შემოწმება");
+    checkBtn.addEventListener("click", async function () {
+      checkBtn.disabled = true;
+      await api.updateCheck();
+      setTimeout(function () { checkBtn.disabled = false; }, 3000);
+    });
+    box.appendChild(checkBtn);
+    if (s.status === "ready") {
+      var instBtn = el("button", "kb-btn", "დაყენება და გადატვირთვა");
+      instBtn.style.marginLeft = "0.4rem";
+      instBtn.addEventListener("click", function () { api.updateInstall(); });
+      box.appendChild(instBtn);
+    }
+  }
+
+  var SETTING_LABELS = {
+    autoUpdate: ["ავტომატური განახლება", "ახალ რელიზს თვითონ ჩამოწერს და გასვლისას დააყენებს"],
+    autoGenerate: ["ტასკების ავტო-გენერაცია", "დღეში ერთხელ პროექტების რეესტრიდან შემოგთავაზებს ახალ ტასკებს"],
+    autoPlanOnOpen: ["ჩეკლისტი გახსნისას", "ტასკს, რომელსაც გეგმა არ აქვს, გახსნისთანავე დაუგეგმავს ნაბიჯებს"],
+    autoIdeas: ["ფუნქციების იდეების განახლება", "როცა პროექტი დაიძვრება და ბარათზე ყველა შემოთავაზება უკვე განხილულია, დღეში მაქსიმუმ 3 პროექტს ახალ იდეებს დაუწერს"]
+  };
+
+  async function renderSettingsPage() {
+    var sub = document.getElementById("settings-sub");
+    var toggles = document.getElementById("settings-toggles");
+    if (!api || !api.settingsGet) {
+      sub.textContent = "პარამეტრები მხოლოდ აპში მუშაობს.";
+      return;
+    }
+    var info = await api.appInfo();
+    sub.textContent = "ვერსია " + info.version + (info.packaged ? "" : " · dev რეჟიმი");
+    var settings = await api.settingsGet();
+    toggles.innerHTML = "";
+    Object.keys(SETTING_LABELS).forEach(function (key) {
+      var row = el("div", "set-row");
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!settings[key];
+      cb.addEventListener("change", async function () {
+        var patch = {};
+        patch[key] = cb.checked;
+        settings = await api.settingsSet(patch);
+      });
+      row.appendChild(cb);
+      var lab = el("div", null, "<div>" + md(SETTING_LABELS[key][0]) + '</div><div class="hint">' +
+        md(SETTING_LABELS[key][1]) + "</div>");
+      row.appendChild(lab);
+      toggles.appendChild(row);
+    });
+    updateStateCache = await api.updateState();
+    paintUpdateBox();
+  }
+
+  if (api && api.onUpdateState) {
+    try {
+      api.onUpdateState(function (s) { updateStateCache = s; paintUpdateBox(); });
+    } catch (e) {}
+  }
+
   /* ---- bottom AI-activity popup ---- */
 
-  var AI_EXPECTED = { full: 900, replan: 300, check: 120, "task-replan": 150, "task-generate": 120 }; // seconds, rough
+  var AI_EXPECTED = { full: 900, replan: 300, check: 120, "task-replan": 150, "task-generate": 120, "task-command": 120, ask: 90, ideas: 90 }; // seconds, rough
   var AI_LABELS = {
     full: "AI ადგენს დღის ბრიფინგს…",
     replan: "AI გეგმავს დღეს თავიდან…",
     check: "AI ამოწმებს ტასკებს…",
     "task-replan": "AI გეგმავს ტასკს თავიდან…",
-    "task-generate": "AI ეძებს ახალ მიმართულებებს…"
+    "task-generate": "AI ეძებს ახალ მიმართულებებს…",
+    "task-command": "AI ასრულებს შენს კომენტარს…",
+    ask: "AI პასუხობს შენს კითხვას…",
+    ideas: "AI ეძებს ახალ ფუნქციებს პროექტისთვის…"
   };
   var aiPopup = el("div", "ai-popup");
   aiPopup.hidden = true;
@@ -1685,6 +2413,8 @@ const BRIEF = {
 
   if (api) {
     initElectron();
+    // The AI's open questions live above the briefing.
+    renderQuestions();
     // Restore the last open view after reloads (AI runs reload the page).
     try {
       var savedView = localStorage.getItem("dailybrief-view");
