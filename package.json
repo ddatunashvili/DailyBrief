@@ -21,7 +21,8 @@
       {
         "provider": "github",
         "owner": "ddatunashvili",
-        "repo": "DailyBrief"
+        "repo": "DailyBrief",
+        "releaseType": "release"
       }
     ],
     "directories": {
