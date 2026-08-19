@@ -11,6 +11,7 @@ Built with [Claude Code](https://claude.com/claude-code).
 - **Daily briefing** — generated each morning by Claude (Sonnet) from activity snapshots, your kanban board, and its own previous state. One page, direct, no generic advice.
 - **Project registry** — `core/projects.json`, rebuilt every 30 minutes with no AI: what each project is, what moved in it, what is still open in it. Browsable on the Projects page; one click turns a project into a task.
 - **Trello-style kanban** — tasks created by you or by the AI. Drop a folder anywhere in the app to turn it into a task (with confirmation); the folder gets linked and a git-aware scanner baselines it. Tasks that arrive without a folder are auto-linked to the matching project, so they always have evidence to be judged against.
+- **Execute a task for real** — the one run that writes code instead of rewriting the board. Say so in a comment ("გააკეთე"), or press the button on the card, and the AI works inside the task's linked folder with Bash and Edit: it refuses any folder that is not a git repo, moves to its own `dailybrief/<taskid>` branch first, opens VS Code so the diff appears live in Source Control, and never commits or pushes. When it finishes it ticks off the checklist steps it actually completed and reports back in the comment thread; closing the task stays your call. `git checkout -` undoes everything, including work that was already uncommitted.
 - **Ask page** — a free-text question about your own projects ("which one is closest to done?", "where is my uncommitted code?", "should I go back to X?"), answered from the registry: commits, dirty files, TODOs, open tasks, goals. The project the question was asked from gets its full card; every other project stays a one-line summary, so a question costs ~5k input tokens. Answers may carry suggested tasks you can create with one click.
 - **Feature ideas per project** — 3 concrete feature suggestions for one project, each with an effort size and a checklist. Accept turns a suggestion into a task (folder linked, checklist filled); decline removes it and adds it to a per-project blocklist the model is given on every later run, so it is never proposed again. Cards refill by themselves once every suggestion has been decided and the project has actually moved since (new commit, different dirty count, more changed files) — max 3 projects a day, switchable in Settings.
 - **Ignored folders** — a page that searches your work roots and mutes any folder: it and everything under it disappears from the monitor, the registry, the analytics and every AI digest. Projects can also be muted straight from their card.
@@ -30,9 +31,10 @@ The design goal is minimal AI spend:
 
 - Scripts gather and compress everything into a small `check-digest.json`; the model reads only that and returns a tiny `check-patch.json`; scripts apply the patch. The model never touches large files.
 - The daily brief is written as a small JSON; a script splices it into the app page.
-- Quality-critical runs (daily brief, day replan, questions, feature ideas) use Sonnet; mechanical runs (checks, task replans, publishing) use Haiku.
+- Quality-critical runs (daily brief, day replan, questions, feature ideas, execution) use Sonnet; mechanical runs (checks, task replans, publishing) use Haiku.
 - Questions and idea runs are read-only: they never rewrite the board, so they run alongside everything else and never reload the page under you.
 - Idle checks short-circuit before spawning the model — zero tokens.
+- Execution is the deliberate exception to the diet: up to 40 turns of reading files and running commands, so it is the only run that costs dollars rather than cents. It never starts on its own — a button press or an explicit comment is required.
 - Every run is journaled (duration, tokens, cost) and future runs show a history-based estimate + ETA up front.
 
 ## Stack

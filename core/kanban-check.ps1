@@ -578,6 +578,16 @@ if (Test-Path $patchPath) {
     }
 }
 
+# A comment that orders the work to actually be DONE (not re-planned) comes
+# back from the model as execute:true. This run has no tools for that - it can
+# only rewrite the board - so it leaves a request behind and main.js launches
+# execute.ps1, which gets its own branch, VS Code and Bash inside the project.
+if ($Command -and $TaskId -and $patch -and $patch.PSObject.Properties['execute'] -and $patch.execute -eq $true) {
+    $req = @{ taskId = $TaskId; at = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss') }
+    [IO.File]::WriteAllText((Join-Path $base 'execute-request.json'), ($req | ConvertTo-Json -Compress), $utf8NoBom)
+    Add-Content $log '[execute] requested by comment'
+}
+
 # A pending comment must always end up acknowledged, patch or no patch:
 # main.js re-fires a command run for every comment still marked "new", so a
 # failed run left un-acked would retrigger itself on every board save.

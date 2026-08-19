@@ -769,7 +769,8 @@ const BRIEF = {
     x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
     search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
     replan: '<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',
-    plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>'
+    plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+    play: '<polygon points="5 3 19 12 5 21 5 3"/>'
   };
   function icon(name) {
     return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICONS[name] || "") + '</svg>';
@@ -1287,6 +1288,27 @@ const BRIEF = {
         if (!ok) tReplanBtn.textContent = "პროცესი უკვე მიმდინარეობს…";
       });
       foot.appendChild(tReplanBtn);
+      // The only button that changes code instead of the board. Needs a
+      // linked folder — without one the script has nowhere to work.
+      var tExecBtn = null;
+      if (api.taskExecute && (t.dirs || []).length) {
+        tExecBtn = el("button", "kb-btn", icon("play") + "შესრულება (VS Code)");
+        tExecBtn.title = "AI ამ ტასკს ნამდვილად შეასრულებს " + (t.dirs[0] || "") +
+          "-ში: გადავა თავის branch-ზე dailybrief/" + t.id + ", გახსნის VS Code-ს და დაწერს კოდს. commit არ კეთდება.";
+        tExecBtn.addEventListener("click", async function () {
+          if (!confirm("AI ნამდვილად შეასრულებს ამ ტასკს ფოლდერში:\n" + t.dirs[0] +
+            "\n\n· გადავა ცალკე branch-ზე: dailybrief/" + t.id +
+            "\n· გახსნის VS Code-ს — ცვლილებებს Source Control-ში ნახავ" +
+            "\n· commit-ს არ გააკეთებს — diff შენთვის დარჩება" +
+            "\n· ერთი გაშვება ჯდება დაახლოებით $1-3 და გრძელდება 10-15 წუთი" +
+            "\n\nუკან დასაბრუნებლად: git checkout " + "-" + "\n\nგავუშვა?")) return;
+          tExecBtn.disabled = true;
+          tExecBtn.textContent = "სრულდება…";
+          var ok = await api.taskExecute(t.id);
+          if (!ok) tExecBtn.textContent = "სხვა შესრულება მიმდინარეობს…";
+        });
+        foot.appendChild(tExecBtn);
+      }
       // A check/replan for this exact task may already be running (several
       // can run at once) — reflect that instead of letting the user queue a
       // second one that will just be rejected.
@@ -1296,6 +1318,7 @@ const BRIEF = {
         tReplanBtn.disabled = true;
         var busyLabel = modeLabel(runningForTask[0].mode) + " მიმდინარეობს…";
         tCheckBtn.textContent = tReplanBtn.textContent = busyLabel;
+        if (tExecBtn) { tExecBtn.disabled = true; tExecBtn.textContent = busyLabel; }
       }
     }
     var doneBtn = el("button", "kb-btn", t.done ? icon("restore") + "დაბრუნება დაფაზე" : icon("check") + "დასრულების დადასტურება");
@@ -2325,7 +2348,7 @@ const BRIEF = {
 
   /* ---- bottom AI-activity popup ---- */
 
-  var AI_EXPECTED = { full: 900, replan: 300, check: 120, "task-replan": 150, "task-generate": 120, "task-command": 120, ask: 90, ideas: 90 }; // seconds, rough
+  var AI_EXPECTED = { full: 900, replan: 300, check: 120, "task-replan": 150, "task-generate": 120, "task-command": 120, ask: 90, ideas: 90, execute: 900 }; // seconds, rough
   var AI_LABELS = {
     full: "AI ადგენს დღის ბრიფინგს…",
     replan: "AI გეგმავს დღეს თავიდან…",
@@ -2334,7 +2357,8 @@ const BRIEF = {
     "task-generate": "AI ეძებს ახალ მიმართულებებს…",
     "task-command": "AI ასრულებს შენს კომენტარს…",
     ask: "AI პასუხობს შენს კითხვას…",
-    ideas: "AI ეძებს ახალ ფუნქციებს პროექტისთვის…"
+    ideas: "AI ეძებს ახალ ფუნქციებს პროექტისთვის…",
+    execute: "AI ასრულებს ტასკს პროექტში — ნახე VS Code…"
   };
   var aiPopup = el("div", "ai-popup");
   aiPopup.hidden = true;

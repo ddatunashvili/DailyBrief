@@ -41,6 +41,9 @@ const ASK_SCRIPT = path.join(ROOT, 'core', 'ask.ps1');
 const ASK_LOG_FILE = path.join(ROOT, 'core', 'ask-log.json');
 const IDEAS_FILE = path.join(ROOT, 'core', 'ideas.json');
 const IGNORE_FILE = path.join(ROOT, 'core', 'ignore.json');
+// The only run that edits a real project: own branch, VS Code, Bash.
+const EXECUTE_SCRIPT = path.join(ROOT, 'core', 'execute.ps1');
+const EXECUTE_REQUEST_FILE = path.join(ROOT, 'core', 'execute-request.json');
 const QUESTIONS_FILE = path.join(ROOT, 'core', 'questions.json');
 const ANALYTICS_DIR = path.join(ROOT, 'core', 'analytics');
 const SNAP_DIR = path.join(ROOT, 'core', 'snapshots');
@@ -679,7 +682,10 @@ const EST_DEFAULTS = {
   // Read-only runs: a question about the registry, and 3 feature ideas for
   // one project. Both on sonnet — this is where a cheaper model shows.
   ask: { inputTokens: 7000, outputTokens: 900, costUsd: 0.04 },
-  ideas: { inputTokens: 3000, outputTokens: 1300, costUsd: 0.03 }
+  ideas: { inputTokens: 3000, outputTokens: 1300, costUsd: 0.03 },
+  // Up to 40 turns of reading files and running commands inside a real repo:
+  // an order of magnitude above every other run, in time and in money.
+  execute: { inputTokens: 60000, outputTokens: 15000, costUsd: 2.00 }
 };
 
 function estimateRun(mode) {
@@ -699,7 +705,7 @@ function estimateRun(mode) {
   const d = EST_DEFAULTS[mode] || EST_DEFAULTS.check;
   const durations = {
     full: 420, replan: 240, check: 90, 'task-replan': 100,
-    'task-generate': 90, 'task-command': 80, ask: 70, ideas: 70
+    'task-generate': 90, 'task-command': 80, ask: 70, ideas: 70, execute: 900
   };
   return {
     inputTokens: d.inputTokens, outputTokens: d.outputTokens, costUsd: d.costUsd,
@@ -773,14 +779,19 @@ ipcMain.handle('ai:openContext', () => {
     full: 'prompt.md', replan: 'prompt-replan.md',
     check: 'prompt-check.md', 'task-replan': 'prompt-task-replan.md',
     'task-generate': 'prompt-task-generate.md', 'task-command': 'prompt-task-command.md',
-    ask: 'prompt-ask.md', ideas: 'prompt-ideas.md'
+    ask: 'prompt-ask.md', ideas: 'prompt-ideas.md', execute: 'prompt-execute.md'
   };
   const pf = promptFiles[mode] || 'prompt-check.md';
   const parts = ['=== რეჟიმი: ' + mode + ' ===', ''];
   parts.push('=== PROMPT (' + pf + ') ===');
   try { parts.push(fs.readFileSync(path.join(ROOT, 'core', pf), 'utf8')); }
   catch (e) { parts.push('(ფაილი ვერ მოიძებნა)'); }
-  if (mode !== 'full' && mode !== 'replan') {
+  if (mode === 'execute') {
+    // No digest file: the brief is assembled from the task card itself and
+    // handed to the model on stdin, inside the project folder.
+    parts.push('', '=== რისგან შედგება ბრიფი ===',
+      'ტასკის სათაური · აღწერა · ჩეკლისტი · ბოლო კომენტარები · მიბმული ფოლდერი · branch');
+  } else if (mode !== 'full' && mode !== 'replan') {
     // ask/ideas keep their own digest files so a question and a check that
     // happen to share a run id can never overwrite each other.
     const dPrefix = (mode === 'ask' || mode === 'ideas') ? 'ask-digest-' : 'check-digest-';
@@ -843,6 +854,8 @@ function runCheck(taskId, replan, generate, command) {
     recordRun(run);
     broadcastAiStatus();
     try { syncFilesToDb(); } catch (e) { /* file fallback still works */ }
+    // A comment may have asked for the work itself, not just a new plan.
+    if (mode === 'task-command') { try { consumeExecuteRequest(); } catch (e) {} }
     scheduleReload();
   });
   return true;
@@ -880,6 +893,52 @@ function runAsk(mode, dir) {
   ps.on('error', finish);
   ps.on('exit', () => { recordRun(run); finish(); });
   return true;
+}
+
+/* Execute: the one run with Bash and Edit inside a real repository. The
+   script itself refuses a folder without git and moves to its own
+   dailybrief/<taskid> branch before the model starts, so everything it does
+   is one `git checkout -` away from gone. It never commits. */
+
+function runExecute(taskId) {
+  const id = String(taskId || '').slice(0, 60);
+  if (!id) return false;
+  if (activeRuns.size >= MAX_CONCURRENT_AI) return false;
+  // One execution at a time: two models editing the same working tree (or
+  // fighting over the branch) is not a state worth debugging.
+  for (const r of activeRuns.values()) if (r.mode === 'execute') return false;
+  const runId = crypto.randomUUID().slice(0, 8);
+  const ps = spawn('powershell.exe', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+    '-File', EXECUTE_SCRIPT, '-TaskId', id, '-RunId', runId
+  ], { windowsHide: true, stdio: 'ignore' });
+  const run = {
+    id: runId, mode: 'execute', taskId: id, pid: ps.pid, startedAt: Date.now(),
+    logFile: path.join(ROOT, 'core', `execute-run-${runId}.log`),
+    killed: false, exclusive: false, est: estimateRun('execute')
+  };
+  activeRuns.set(runId, run);
+  broadcastAiStatus();
+  ps.on('error', () => { activeRuns.delete(runId); broadcastAiStatus(); });
+  ps.on('exit', () => {
+    activeRuns.delete(runId);
+    recordRun(run);
+    broadcastAiStatus();
+    try { syncFilesToDb(); } catch (e) { /* files still serve as fallback */ }
+    scheduleReload();
+  });
+  return true;
+}
+
+ipcMain.handle('task:execute', (ev, taskId) => runExecute(taskId));
+
+/* A comment can order the work itself ("გააკეთე"), not just a re-plan. The
+   board run has no tools for that, so it writes execute-request.json and we
+   pick it up here, the moment that run exits. */
+function consumeExecuteRequest() {
+  const req = readJson(EXECUTE_REQUEST_FILE);
+  try { fs.unlinkSync(EXECUTE_REQUEST_FILE); } catch (e) { /* already gone */ }
+  if (req && req.taskId) runExecute(req.taskId);
 }
 
 function readAskLog() {

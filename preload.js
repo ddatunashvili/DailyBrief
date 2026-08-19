@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld('dailybrief', {
   projectsRefresh: () => ipcRenderer.invoke('projects:refresh'),
   projectsOpen: (dir) => ipcRenderer.invoke('projects:open', dir),
   onProjectsUpdated: (cb) => ipcRenderer.on('projects:updated', () => cb()),
+  // Execute: AI does the task in the real project, on its own git branch.
+  taskExecute: (id) => ipcRenderer.invoke('task:execute', id),
   // Ask page: free-text questions about the project registry.
   askLoad: () => ipcRenderer.invoke('ask:load'),
   askSend: (text, dir) => ipcRenderer.invoke('ask:send', text, dir),
