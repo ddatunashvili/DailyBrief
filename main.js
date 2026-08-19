@@ -374,7 +374,13 @@ ipcMain.handle('kanban:save', (ev, data) => {
   fs.writeFileSync(KANBAN_FILE, JSON.stringify(clean, null, 2), 'utf8');
   // A user comment is an order inside that task's scope, not a sticky note:
   // every task carrying an unhandled comment gets its own tiny AI run.
+  // The comment stays "new" until the run acks it in kanban.json, so any save
+  // in the meantime would spawn a second run for the same comment.
+  const commanding = new Set(Array.from(activeRuns.values())
+    .filter((r) => r.mode === 'task-command')
+    .map((r) => r.taskId));
   clean.tasks
+    .filter((t) => !commanding.has(t.id))
     .filter((t) => (t.comments || []).some((c) => c.by === 'user' && c.state === 'new'))
     .slice(0, MAX_CONCURRENT_AI)
     .forEach((t) => runCheck(t.id, false, false, true));
