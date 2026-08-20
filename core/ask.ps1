@@ -22,7 +22,7 @@ $OutputEncoding = [Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
-$claude = 'C:\Users\davit\AppData\Roaming\nvm\v22.22.3\claude.cmd'
+. (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false

@@ -19,7 +19,7 @@ $base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
 $today  = Get-Date -Format 'yyyy-MM-dd'
 $brief  = Join-Path $base "briefings\$today.md"
 $log    = Join-Path $base 'last-run.log'
-$claude = 'C:\Users\davit\AppData\Roaming\nvm\v22.22.3\claude.cmd'
+. (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
 
 function Show-Brief([string]$Path) {
     Start-Process powershell.exe -ArgumentList @(
