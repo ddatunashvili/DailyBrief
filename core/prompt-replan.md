@@ -2,7 +2,7 @@
 
 წაიკითხე მხოლოდ ეს ფაილები (სამუშაო ფოლდერი C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core):
 - briefs/{{TODAY}}.json — დღევანდელი გეგმა (ამოცანები id-ებით).
-- kanban.json — კანბან-დაფა: tasks (სტატუსებით urgent/important/planning/delayed, done, comments, aiNotes) და archive. ეს არის მთავარი სიგნალი: done=true ტასკები = რა შესრულდა დღეს; urgent/important ტასკები ასახე ამოცანებში, planning-ზე პირველი ნაბიჯი შესთავაზე, delayed არ წამოწიო. დავითის comments და რედაქტირებული title-ები მისი ფორმულირებაა — გამოიყენე.
+- kanban.json — კანბან-დაფა: tasks (სტატუსებით urgent/important/planning/delayed/active, done, comments, aiNotes) და archive. ეს არის მთავარი სიგნალი: done=true ტასკები = რა შესრულდა დღეს; urgent/important ტასკები ასახე ამოცანებში, planning-ზე პირველი ნაბიჯი შესთავაზე, delayed არ წამოწიო. დავითის comments და რედაქტირებული title-ები მისი ფორმულირებაა — გამოიყენე.
 - STATE.md — კონტექსტისთვის (მთავარი მიზანი: დაცვა ივლისში).
 
 სხვა არაფერი წაიკითხო — snapshots, activity და ისტორია ამ რეჟიმში არ გჭირდება.

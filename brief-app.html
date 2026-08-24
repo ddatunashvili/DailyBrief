@@ -22,6 +22,8 @@
     --crit: #E5766C;
     --crit-soft: #35201D;
     --track: #262C38;
+    --live: #46B7C6;
+    --live-soft: #163034;
   }
 
   * { box-sizing: border-box; scrollbar-width: none; }
@@ -304,6 +306,7 @@
   .dot-important { background: var(--warn); }
   .dot-planning { background: var(--accent); }
   .dot-delayed { background: var(--muted); }
+  .dot-active { background: var(--live); }
   .dot-done { background: var(--ok); }
   .kb-col-name {
     font-size: 0.72rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
@@ -317,6 +320,7 @@
   .st-important { color: var(--warn); background: var(--warn-soft); }
   .st-planning { color: var(--accent); background: var(--accent-soft); }
   .st-delayed { color: var(--muted); background: var(--track); }
+  .st-active { color: var(--live); background: var(--live-soft); }
   .st-done { color: var(--ok); background: var(--ok-soft); }
   .kb-count { font-size: 0.72rem; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
   .kb-add-btn { background: none; border: none; color: var(--muted); font-size: 1.05rem; cursor: pointer; line-height: 1; padding: 0 0.2rem; }
@@ -1057,6 +1061,7 @@ const BRIEF = {
     { key: "important", label: "მნიშვნელოვანი", cls: "st-important" },
     { key: "planning", label: "დასაგეგმი", cls: "st-planning" },
     { key: "delayed", label: "გადადებული", cls: "st-delayed" },
+    { key: "active", label: "მიმდინარე", cls: "st-active" },
     { key: "done", label: "დასრულებული", cls: "st-done" }
   ];
 

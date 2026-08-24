@@ -490,7 +490,7 @@ if (Test-Path $patchPath) {
     $gotLock = $false
     try {
         $patch = Get-Content $patchPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $valid = @('urgent', 'important', 'planning', 'delayed')
+        $valid = @('urgent', 'important', 'planning', 'delayed', 'active')
         $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
 
         $gotLock = $mutex.WaitOne(30000)

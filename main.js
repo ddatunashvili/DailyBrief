@@ -325,7 +325,7 @@ ipcMain.handle('plans:save', async (ev, items) => {
 /* Kanban: board data lives in Mongo + core\kanban.json. The file mirror is
    what the pipeline's Claude runs read and write, so saves always hit both. */
 
-const KANBAN_STATUSES = ['urgent', 'important', 'planning', 'delayed'];
+const KANBAN_STATUSES = ['urgent', 'important', 'planning', 'delayed', 'active'];
 
 function sanitizeKanban(data) {
   const now = new Date().toISOString();
