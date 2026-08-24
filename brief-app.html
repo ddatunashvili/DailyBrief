@@ -472,10 +472,19 @@
   .kb-dir-del:hover { color: var(--crit); }
   .kb-dir-empty { color: var(--muted); font-size: 0.78rem; }
   .kb-dir-add { align-self: flex-start; }
-  /* Bottom AI-activity popup */
+  /* Every floating message lives in one bottom-right column: centred popups
+     sat on top of the board and hid the cards underneath. */
+  .ai-stack {
+    position: fixed; right: 1rem; bottom: 1rem; z-index: 90;
+    display: flex; flex-direction: column; align-items: stretch; gap: 0.55rem;
+    width: min(380px, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem); overflow-y: auto;
+    pointer-events: none;
+  }
+  .ai-stack > * { pointer-events: auto; }
+  /* AI-activity popup */
   .ai-popup {
-    position: fixed; bottom: 1.1rem; left: 50%; transform: translateX(-50%);
-    width: min(440px, calc(100vw - 2rem));
+    position: static; width: 100%;
     background: var(--surface); border: 1px solid var(--accent); border-radius: 12px;
     padding: 0.75rem 1rem 0.85rem; z-index: 60;
     box-shadow: 0 10px 34px rgba(0,0,0,0.5);
@@ -497,9 +506,9 @@
   .ai-popup-more { margin-top: 0.4rem; font-size: 0.7rem; color: var(--muted); }
   /* AI problem toasts: a failed, incomplete or late run says so out loud. */
   .ai-toasts {
-    position: fixed; top: 1rem; right: 1rem; z-index: 90;
+    position: static;
     display: flex; flex-direction: column; gap: 0.5rem;
-    width: min(400px, calc(100vw - 2rem));
+    width: 100%;
   }
   .ai-toast {
     background: var(--surface); border: 1px solid var(--crit); border-left-width: 4px;
@@ -780,40 +789,47 @@
 const BRIEF = {
   "date": "2026-08-24",
   "dateLabel": "24 აგვისტო, ორშაბათი",
-  "tldr": "CHITI web და mobile 5 დღეა Initial commit-ზე გაყინულია, ბექენდი კი ყოველდღიურად ვითარდება — დღეს ორივეს პირველი commit სჭირდება. RENODE PANEL-ზე backup-pull ლოგ-როტაცია ფაქტობრივად დასრულდა, დახურვაღა დარჩა. mail driver TODO მე-4 დღეა უგულებელყოფილია.",
+  "tldr": "დღის დარჩენილი დრო: mail driver TODO-ს ტრივიალური დახურვა (5 დღეა გვერდზეა) და backup-pull-ის საბოლოო ვერიფიკაცია (2/4 ქვეტასკი უკვე დახურულია) პირველ რიგში, შემდეგ CHITI web/mobile-ის 5-დღიანი გაყინვის გატეხვა, Deploy History-ის დახურვა და ორგანულად დაწყებული ბილინგის (InvoiceHistory) ფილტრის პირველი ნაბიჯი.",
   "tasks": [
     {
       "id": "chiti-web-forms",
       "title": "CHITI web — ფორმების ვალიდაცია",
-      "desc": "**ChitiWeb** 5 დღეა Initial commit-ზეა (08-19). `ProjRegForm`/`ProjEditForm`/`ServiceRegisterForm`/`ServiceEditForm` ვალიდაცია დაუსრულებელია. დღეს საჭირო პირველი რეალური commit.",
+      "desc": "**ChitiWeb** 5 დღეა Initial commit-ზეა (08-19). `ProjRegForm`/`ProjEditForm`/`ServiceRegisterForm`/`ServiceEditForm` ვალიდაცია დაუსრულებელია (0/5 ქვეტასკი). დღეს საჭირო პირველი რეალური commit.",
       "weight": 30,
       "badge": "30% დროის"
     },
     {
       "id": "chiti-mobile-build",
       "title": "CHITI mobile — Android build",
-      "desc": "**CHITIApp** ასევე 5 დღეა Initial commit-ზეა. scaffold მზადაა (`build.gradle`, `MainActivity.kt`), საჭიროა Expo dev build-ის ერთი რეალური მცდელობა ფიზიკურ მოწყობილობაზე.",
-      "weight": 25,
-      "badge": "25% დროის"
-    },
-    {
-      "id": "umt0yas07u52f",
-      "title": "RENODE PANEL — Deploy History route + retention",
-      "desc": "`deploy_logs` migration, log-ჩაწერა და React კომპონენტი მზადაა 08-20-დან, მაგრამ `RouteServiceProvider.php`-ში route-ის რეგისტრაცია და retention job კვლავ pending-ია.",
+      "desc": "**CHITIApp** ასევე 5 დღეა Initial commit-ზეა (0/5 ქვეტასკი). scaffold მზადაა (`build.gradle`, `MainActivity.kt`), საჭიროა Expo dev build-ის ერთი რეალური მცდელობა ფიზიკურ მოწყობილობაზე.",
       "weight": 20,
       "badge": "20% დროის"
     },
     {
-      "id": "umt0977k1d79m",
-      "title": "backup-pull ლოგ-როტაციის საბოლოო დახურვა",
-      "desc": "08-23-ს `feat(backup): a log kept to the same week the archives are` დაკომიტდა — სამუშაო ფაქტობრივად დასრულებულია. დარჩა `.backup-pull-state.json` ვალიდაცია და tray-ისტორიის ტესტი, შემდეგ დახურვა.",
+      "id": "umt097bresnqi",
+      "title": "InfoCommand.php mail driver TODO",
+      "desc": "მე-5 ზედიზედ დღეა ხელუხლებელი (0/4 ქვეტასკი), მიუხედავად ყოველდღიური RENODE commit-ებისა. 4-ხაზიანი, `config('mail.default')`-ზე დაფუძნებული ტრივიალური fix — დღეს ეს პირველი დახურე.",
       "weight": 15,
       "badge": "15% დროის"
     },
     {
-      "id": "umt097bresnqi",
-      "title": "InfoCommand.php mail driver TODO",
-      "desc": "მე-4 ზედიზედ დღეა ხელუხლებელი, მიუხედავად ყოველდღიური RENODE commit-ებისა. 4-ხაზიანი, `config('mail.default')`-ზე დაფუძნებული ტრივიალური fix — დღეს დახურე.",
+      "id": "umt0yas07u52f",
+      "title": "RENODE PANEL — Deploy History route + retention",
+      "desc": "`deploy_logs` migration, log-ჩაწერა და React კომპონენტი მზადაა 08-20-დან, მაგრამ `RouteServiceProvider.php`-ში route-ის რეგისტრაცია და retention job კვლავ pending-ია (4-ჯერ ზედიზედ).",
+      "weight": 15,
+      "badge": "15% დროის"
+    },
+    {
+      "id": "umt0977k1d79m",
+      "title": "backup-pull ლოგ-როტაციის საბოლოო დახურვა",
+      "desc": "log rotation (08-23 commit) და cleanup დახურულია — 2/4 ქვეტასკი შესრულებული. დარჩა მხოლოდ `.backup-pull-state.json` ვალიდაცია და tray-ისტორიის ტესტი, შემდეგ დაფაზე დახურვა.",
+      "weight": 10,
+      "badge": "10% დროის"
+    },
+    {
+      "id": "umt7l80qxx2vv",
+      "title": "InvoiceHistory ფილტრი — პირველი ნაბიჯი",
+      "desc": "დღეს ორგანულად დაიწყო ბილინგის მუშაობა (Invoice.php, UserBillingController.php, billing.blade.php დაუკომიტებელია) — 3 ახალი planning ტასკი შეიქმნა. პირველი ნაბიჯი: `Invoice.php`-ში `scopeFilter()` მეთოდის დაწერა status/date/search პარამეტრებზე.",
       "weight": 10,
       "badge": "10% დროის"
     }
@@ -826,8 +842,8 @@ const BRIEF = {
     },
     {
       "sev": "warn",
-      "label": "mail driver TODO",
-      "text": "`InfoCommand.php:61` TODO მე-4 დღეა იგნორირებულია, მიუხედავად RENODE PANEL-ის ყოველდღიური commit-ებისა."
+      "label": "mail driver TODO — მე-5 დღე",
+      "text": "`InfoCommand.php:61` TODO მე-5 ზედიზედ დღეა იგნორირებულია, მიუხედავად RENODE PANEL-ის ყოველდღიური commit-ებისა."
     },
     {
       "sev": "warn",
@@ -836,18 +852,19 @@ const BRIEF = {
     },
     {
       "sev": "note",
-      "label": "backup-pull დახურვისთვის მზადაა",
-      "text": "ლოგ-როტაცია commit-ით (08-23) ფაქტობრივად დასრულდა — მხოლოდ დაფის დახურვაა დარჩენილი."
+      "label": "backup-pull თითქმის დახურულია",
+      "text": "2/4 ქვეტასკი დახურულია (log rotation + cleanup) — მხოლოდ state-ვალიდაცია და tray-ტესტი დარჩა."
     }
   ],
   "recap": [
     "RENODE PANEL: 08-23-ს backup-pull ლოგ-როტაცია დაკომიტდა, root რეფაქტორი (`ops/`, `docs/legacy`) დასრულდა.",
     "ChitiBackend: 08-24-ს placeholder სურათები shop/product-ებზე, 08-23-ს backend fix PR merge.",
-    "CHITI ბექენდის `main`-ში merge (roadmap, compat layer, Prisma 7) 08-20-ს დასრულდა — დახურულია."
+    "CHITI ბექენდის `main`-ში merge (roadmap, compat layer, Prisma 7) 08-20-ს დასრულდა — დახურულია.",
+    "დღეს: backup-pull-ის 2/4 ქვეტასკი დაიხურა, RENODE PANEL-ზე ორგანულად დაიწყო ბილინგის (InvoiceHistory/UserBilling) მუშაობა."
   ],
   "assessment": [
-    "ნაწილობრივ არასწორია. RENODE PANEL-ზე ყოველდღიური commit-ები გრძელდება ახალ ფუნქციებზე (backup, database-ზომები, dashboards), მაგრამ ორი მცირე დავალება (mail driver TODO, Deploy History route) გვერდზე გაჩერებულია.",
-    "ამავე დროს ChitiWeb და CHITIApp — ახალი, \"important\" სტატუსის მქონე პროდუქტის ხაზი — უკვე 5 დღეა სრულად გაყინულია. ეს აქტიური არჩევანია, არა ბუნებრივი კლება: ყოველდღიური დრო RENODE-ის დახვეწას სთმობ CHITI-ს ახალი ნაწილების ხარჯზე. თუ CHITI web/mobile რეალურად პრიორიტეტულია, დღეს მინიმუმ ერთი commit საჭიროა ორივეში."
+    "დღის დარჩენილი ნაწილისთვის ორი სწრაფი დახურვა პირველ რიგშია საჭირო — mail driver TODO (5-ჯერ გადავადებული, ტრივიალური) და backup-pull-ის უკვე თითქმის დასრულებული ვერიფიკაცია.",
+    "CHITI web/mobile კვლავ 5-დღიანი გაყინვის ყველაზე დიდი რისკია — თუ დღეს არცერთ repo-ში commit არ გაჩნდება, ეს მე-6 ზედიზედ დღე იქნება. ახლად დაწყებული ბილინგის (InvoiceHistory) მუშაობა ჯერჯერობით მხოლოდ პირველი ნაბიჯით შედის გეგმაში, სანამ პრიორიტეტულობა არ დადასტურდება."
   ]
 };
 /*BRIEF-DATA-END*/
@@ -2599,14 +2616,19 @@ const BRIEF = {
     ideas: "AI ეძებს ახალ ფუნქციებს პროექტისთვის…",
     execute: "AI ასრულებს ტასკს პროექტში — ნახე VS Code…"
   };
-  var aiPopup = el("div", "ai-popup");
-  aiPopup.hidden = true;
-  document.body.appendChild(aiPopup);
-
-  /* ---- AI problems: failed / incomplete / late runs ---- */
+  // One column, bottom-right: problem toasts on top, the live activity popup at
+  // the bottom, so nothing ever lands over the board.
+  var aiStack = el("div", "ai-stack");
+  document.body.appendChild(aiStack);
 
   var aiToasts = el("div", "ai-toasts");
-  document.body.appendChild(aiToasts);
+  aiStack.appendChild(aiToasts);
+
+  var aiPopup = el("div", "ai-popup");
+  aiPopup.hidden = true;
+  aiStack.appendChild(aiPopup);
+
+  /* ---- AI problems: failed / incomplete / late runs ---- */
 
   var PROB_TITLE = {
     failed: "AI გაშვება ჩავარდა",
