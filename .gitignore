@@ -32,3 +32,5 @@ core/dailybrief.db
 core/dailybrief.db-shm
 core/dailybrief.db-wal
 *.log
+core/ai-problems.jsonl
+core/ai-diagnostics.txt

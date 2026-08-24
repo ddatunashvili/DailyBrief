@@ -719,42 +719,314 @@ function estimateRun(mode) {
    The AI page reads this and can kill any currently running entry by id. */
 const AI_RUNS_FILE = path.join(ROOT, 'core', 'ai-runs.jsonl');
 
-function parseUsage(logFile) {
+/* Everything that can go wrong with a run — a CLI that never started, a model
+   that stopped at the turn limit halfway through the work, an answer file that
+   was never written, a run that hangs forever — lands in ai-problems.jsonl and
+   is pushed to the window as an ai:problem event. Before this, every one of
+   those cases was journaled as "ok" and the user saw a run that "succeeded"
+   while nothing changed. */
+const AI_PROBLEMS_FILE = path.join(ROOT, 'core', 'ai-problems.jsonl');
+const AI_DIAG_FILE = path.join(ROOT, 'core', 'ai-diagnostics.txt');
+
+// Hard ceiling per mode (seconds). A hung claude otherwise sits in activeRuns
+// forever: the spinner never stops, one of MAX_CONCURRENT_AI slots stays gone,
+// and for the pipeline `pipelineRunning` stays true so no daily run ever
+// starts again.
+const RUN_TIMEOUT_SEC = {
+  full: 2400, replan: 1500, check: 900, 'task-replan': 900,
+  'task-generate': 900, 'task-command': 900, ask: 600, ideas: 600, execute: 3600
+};
+
+// A run is "late" (not yet dead) at 2.5x its estimate — that's what earns a
+// warning toast while it is still running.
+function lateAfterSec(run) {
+  const est = (run.est && run.est.durationSec) || 120;
+  return Math.max(90, Math.round(est * 2.5));
+}
+
+function timeoutSec(mode) { return RUN_TIMEOUT_SEC[mode] || 900; }
+
+// Deleting the log before the run is what makes "no log" mean "the script
+// died before it wrote anything" instead of "we are reading yesterday's file".
+// Pipeline runs share one last-run.log, and an early exit used to make main
+// re-journal the previous run's tokens and cost as a brand new run.
+function freshLog(file) {
+  try { fs.unlinkSync(file); } catch (e) { /* nothing to clear */ }
+  return file;
+}
+
+function parseUsage(logFile, startedAt) {
+  const empty = {
+    inputTokens: 0, outputTokens: 0, costUsd: 0, skipped: false,
+    hasLog: false, stale: false, text: '', result: null, warnings: []
+  };
+  let text = '';
   try {
-    const text = fs.readFileSync(logFile, 'utf8');
-    const grab = (re) => {
-      let m, last = null;
-      while ((m = re.exec(text)) !== null) last = m[1];
-      return last;
-    };
-    return {
-      inputTokens: parseInt(grab(/"inputTokens"\s*:\s*(\d+)/g) || grab(/"input_tokens"\s*:\s*(\d+)/g) || '0', 10),
-      outputTokens: parseInt(grab(/"outputTokens"\s*:\s*(\d+)/g) || grab(/"output_tokens"\s*:\s*(\d+)/g) || '0', 10),
-      costUsd: parseFloat(grab(/"costUSD"\s*:\s*([\d.]+)/g) || grab(/"total_cost_usd"\s*:\s*([\d.]+)/g) || '0'),
-      skipped: /^skipped:/.test(text.trim())
-    };
+    const st = fs.statSync(logFile);
+    // 2s of slack: the script may write its first line just before we look.
+    if (startedAt && st.mtimeMs < startedAt - 2000) return Object.assign({}, empty, { hasLog: true, stale: true });
+    text = fs.readFileSync(logFile, 'utf8');
   } catch (e) {
-    return { inputTokens: 0, outputTokens: 0, costUsd: 0, skipped: false };
+    return empty;
+  }
+  const grab = (re) => {
+    let m, last = null;
+    while ((m = re.exec(text)) !== null) last = m[1];
+    return last;
+  };
+  const num = (re) => parseInt(grab(re) || '0', 10);
+  // The CLI's own result line is the only trustworthy source: is_error,
+  // subtype and num_turns all live there.
+  let result = null;
+  const lines = text.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const s = lines[i].replace(/^﻿/, '').trim();
+    if (!s.startsWith('{') || s.indexOf('"is_error"') < 0) continue;
+    try { result = JSON.parse(s); break; } catch (e) { /* truncated line */ }
+  }
+  // input_tokens alone is ~25 on a cached run; the real input is the cache
+  // read/creation counters. Without them the token tiles and every estimate
+  // built from history were off by four orders of magnitude.
+  const inputTokens = result && result.usage
+    ? (result.usage.input_tokens || 0) + (result.usage.cache_read_input_tokens || 0) +
+      (result.usage.cache_creation_input_tokens || 0)
+    : num(/"input_tokens"\s*:\s*(\d+)/g) + num(/"cache_read_input_tokens"\s*:\s*(\d+)/g) +
+      num(/"cache_creation_input_tokens"\s*:\s*(\d+)/g);
+  return {
+    inputTokens,
+    outputTokens: (result && result.usage && result.usage.output_tokens) ||
+      num(/"outputTokens"\s*:\s*(\d+)/g) || num(/"output_tokens"\s*:\s*(\d+)/g),
+    costUsd: (result && result.total_cost_usd) ||
+      parseFloat(grab(/"total_cost_usd"\s*:\s*([\d.]+)/g) || grab(/"costUSD"\s*:\s*([\d.]+)/g) || '0'),
+    skipped: /^skipped:/.test(text.trim()),
+    hasLog: true,
+    stale: false,
+    text,
+    result,
+    warnings: lines.filter((l) => l.indexOf('[warn]') >= 0).map((l) => l.trim())
+  };
+}
+
+// Georgian, because every string the user reads in this app is Georgian.
+const WARN_TEXT = [
+  [/model wrote no output file/i, 'AI-მ პასუხის ფაილი საერთოდ არ ჩაწერა — ცვლილება არ შენახულა'],
+  [/output file is not valid JSON/i, 'AI-ს პასუხი გატეხილი JSON იყო — ვერ ჩაიწერა'],
+  [/summary file is not valid JSON/i, 'AI-ს შედეგის ფაილი გატეხილი JSON იყო'],
+  [/patch apply failed/i, 'დაფის ცვლილება ვერ დაედო kanban.json-ს'],
+  [/merge failed/i, 'AI-ს პასუხის ჩაწერა ჩავარდა'],
+  [/comment ack failed/i, 'კომენტარზე პასუხის მონიშვნა ჩავარდა']
+];
+
+function warnText(line) {
+  for (const [re, msg] of WARN_TEXT) if (re.test(line)) return msg;
+  return line.replace(/^\[warn\]\s*/, '');
+}
+
+/* status: ok | skipped | killed | timeout | failed | incomplete | partial | thin
+   level:  info (no toast) | warn (yellow toast) | error (red toast) */
+function classifyRun(run, exitCode, usage) {
+  const late = Math.round((Date.now() - run.startedAt) / 1000) > lateAfterSec(run);
+  if (run.killed) return { status: 'killed', level: 'info', message: 'პროცესი შენ გათიშე.' };
+  if (run.timedOut) {
+    return {
+      status: 'timeout', level: 'error',
+      message: 'AI ' + Math.round(timeoutSec(run.mode) / 60) + ' წუთში ვერ დაასრულა და იძულებით გაითიშა.',
+      detail: 'timeout after ' + timeoutSec(run.mode) + 's'
+    };
+  }
+  if (!usage.hasLog || usage.stale) {
+    return {
+      status: 'failed', level: 'error',
+      message: 'AI საერთოდ ვერ გაეშვა — claude CLI არ დაწერა ლოგი. შეამოწმე რომ claude დაინსტალირებულია.',
+      detail: usage.stale ? 'log file is older than the run (script exited before writing)' : 'log file missing'
+    };
+  }
+  if (usage.skipped) {
+    return { status: 'skipped', level: 'info', message: usage.text.trim().split(/\r?\n/)[0] };
+  }
+  // The script itself gave up before reaching the model (no claude CLI, no
+  // git, no folder): its own message is the most useful thing we can show.
+  const fatal = /^\[fatal\]\s*(.+)$/m.exec(usage.text);
+  if (fatal) {
+    return {
+      status: 'failed', level: 'error',
+      message: 'AI ვერ გაეშვა: ' + fatal[1].trim(),
+      detail: usage.text.slice(0, 800)
+    };
+  }
+  if (exitCode) {
+    return {
+      status: 'failed', level: 'error',
+      message: 'AI სკრიპტი შეცდომით დასრულდა (კოდი ' + exitCode + ').',
+      detail: usage.text.slice(-800)
+    };
+  }
+  if (!usage.result) {
+    return {
+      status: 'failed', level: 'error',
+      message: 'AI-მ პასუხი არ დააბრუნა — გაშვება შუაზე გაწყდა.',
+      detail: usage.text.slice(-800)
+    };
+  }
+  if (usage.result.is_error) {
+    const sub = String(usage.result.subtype || '');
+    if (sub === 'error_max_turns') {
+      return {
+        status: 'incomplete', level: 'error',
+        message: 'AI ტურების ლიმიტს (' + (usage.result.num_turns || '?') + ') მიაღწია და დავალება ბოლომდე ვერ მიიყვანა.',
+        detail: (usage.result.errors || []).join('; ')
+      };
+    }
+    return {
+      status: 'failed', level: 'error',
+      message: 'AI შეცდომით დასრულდა: ' + (sub || 'უცნობი შეცდომა') + '.',
+      detail: (usage.result.errors || []).join('; ') || usage.text.slice(-500)
+    };
+  }
+  if (usage.warnings.length) {
+    return {
+      status: 'partial', level: 'warn',
+      message: warnText(usage.warnings[usage.warnings.length - 1]),
+      detail: usage.warnings.join(' | ')
+    };
+  }
+  // Ran clean but said almost nothing: an answer this short is a non-answer.
+  if (usage.outputTokens > 0 && usage.outputTokens < 60) {
+    return {
+      status: 'thin', level: 'warn',
+      message: 'AI-ს პასუხი საეჭვოდ მოკლეა (' + usage.outputTokens + ' output ტოკენი) — შეიძლება არასრული იყოს.',
+      detail: 'outputTokens=' + usage.outputTokens
+    };
+  }
+  if (late) {
+    return {
+      status: 'ok', level: 'warn',
+      message: 'AI დაასრულა, მაგრამ მოსალოდნელზე ბევრად დიდხანს (' +
+        Math.round((Date.now() - run.startedAt) / 1000) + ' წმ).',
+      detail: 'expected ~' + ((run.est && run.est.durationSec) || '?') + 's'
+    };
+  }
+  return { status: 'ok', level: 'info', message: '' };
+}
+
+// powershell.exe itself failed to launch: no log will ever exist, and without
+// this the run just vanished from the UI as if it had finished.
+function reportSpawnFailure(run, err) {
+  const entry = {
+    id: run.id, at: new Date().toISOString(), start: new Date(run.startedAt).toISOString(),
+    mode: run.mode, taskId: run.taskId || null, status: 'failed', level: 'error',
+    durationSec: Math.round((Date.now() - run.startedAt) / 1000),
+    message: 'AI პროცესი ვერ გაეშვა (powershell): ' + ((err && err.message) || 'უცნობი შეცდომა'),
+    detail: (err && err.stack) || '', logFile: run.logFile
+  };
+  try { fs.appendFileSync(AI_RUNS_FILE, JSON.stringify(entry) + '\n', 'utf8'); } catch (e) {}
+  reportProblem(entry);
+}
+
+function reportProblem(entry) {
+  try { fs.appendFileSync(AI_PROBLEMS_FILE, JSON.stringify(entry) + '\n', 'utf8'); } catch (e) {}
+  if (win && !win.isDestroyed()) {
+    try { win.webContents.send('ai:problem', entry); } catch (e) { /* window closing */ }
   }
 }
 
-function recordRun(run) {
-  const usage = parseUsage(run.logFile);
+function readProblems() {
+  try {
+    return fs.readFileSync(AI_PROBLEMS_FILE, 'utf8').split(/\r?\n/).filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+  } catch (e) {
+    return [];
+  }
+}
+
+function recordRun(run, exitCode) {
+  const usage = parseUsage(run.logFile, run.startedAt);
+  const verdict = classifyRun(run, exitCode || 0, usage);
   const entry = {
     id: run.id,
     start: new Date(run.startedAt).toISOString(),
     mode: run.mode,
     taskId: run.taskId || null,
     durationSec: Math.round((Date.now() - run.startedAt) / 1000),
-    status: run.killed ? 'killed' : (usage.skipped ? 'skipped' : 'ok'),
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    costUsd: usage.costUsd
+    status: verdict.status,
+    level: verdict.level,
+    message: verdict.message || '',
+    // A stale log belongs to an older run: never bill this one for its tokens.
+    inputTokens: usage.stale ? 0 : usage.inputTokens,
+    outputTokens: usage.stale ? 0 : usage.outputTokens,
+    costUsd: usage.stale ? 0 : usage.costUsd,
+    exitCode: exitCode || 0
   };
   try { fs.appendFileSync(AI_RUNS_FILE, JSON.stringify(entry) + '\n', 'utf8'); } catch (e) {}
+  if (verdict.level !== 'info') {
+    reportProblem(Object.assign({}, entry, {
+      at: new Date().toISOString(),
+      detail: verdict.detail || '',
+      logFile: run.logFile
+    }));
+  }
+  return entry;
 }
 
+/* Watchdog: nothing else notices a run that simply never ends. Every 5s each
+   active run is checked twice — once for "this is late" (a warning while it is
+   still running, so the user is not staring at a frozen spinner), once for the
+   hard ceiling, where the process tree is killed like a manual cancel. */
+function runWatchdog() {
+  const now = Date.now();
+  for (const run of activeRuns.values()) {
+    const elapsed = (now - run.startedAt) / 1000;
+    if (!run.lateNotified && elapsed > lateAfterSec(run)) {
+      run.lateNotified = true;
+      reportProblem({
+        id: run.id, at: new Date().toISOString(), start: new Date(run.startedAt).toISOString(),
+        mode: run.mode, taskId: run.taskId || null, status: 'slow', level: 'warn',
+        durationSec: Math.round(elapsed),
+        message: 'AI იგვიანებს — ' + Math.round(elapsed) + ' წმ გავიდა, მოსალოდნელი იყო ~' +
+          ((run.est && run.est.durationSec) || '?') + ' წმ. ისევ მუშაობს.',
+        detail: 'still running', logFile: run.logFile
+      });
+    }
+    if (!run.timedOut && elapsed > timeoutSec(run.mode)) {
+      run.timedOut = true;
+      spawn('taskkill', ['/PID', String(run.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    }
+  }
+}
+setInterval(runWatchdog, 5000);
+
 ipcMain.handle('ai:runs', () => readRuns().slice(-100).reverse());
+ipcMain.handle('ai:problems', () => readProblems().slice(-60).reverse());
+
+/* One file to send on: every recent problem plus the tail of each log it
+   points at, so a broken run can be diagnosed without opening the app. */
+ipcMain.handle('ai:openDiagnostics', () => {
+  const problems = readProblems().slice(-25).reverse();
+  const parts = ['=== DailyBrief AI დიაგნოსტიკა · ' + new Date().toISOString() + ' ===', ''];
+  if (!problems.length) parts.push('(პრობლემა არ დაფიქსირებულა)');
+  const seen = new Set();
+  problems.forEach((p) => {
+    parts.push('--- ' + p.at + ' · ' + p.mode + ' · ' + p.status + ' (' + p.level + ') · run ' + p.id +
+      (p.taskId ? ' · task ' + p.taskId : '') + ' · ' + (p.durationSec || 0) + 's');
+    parts.push('    ' + (p.message || ''));
+    if (p.detail) parts.push('    detail: ' + String(p.detail).replace(/\r?\n/g, ' ').slice(0, 1000));
+    parts.push('');
+  });
+  problems.forEach((p) => {
+    if (!p.logFile || seen.has(p.logFile)) return;
+    seen.add(p.logFile);
+    parts.push('=== LOG ' + path.basename(p.logFile) + ' (ბოლო 4000 სიმბოლო) ===');
+    try { parts.push(fs.readFileSync(p.logFile, 'utf8').slice(-4000)); }
+    catch (e) { parts.push('(ლოგი აღარ არსებობს)'); }
+    parts.push('');
+  });
+  parts.push('=== ბოლო 20 გაშვება (ai-runs.jsonl) ===');
+  readRuns().slice(-20).forEach((r) => parts.push(JSON.stringify(r)));
+  // BOM on purpose: this file is opened in the user's text editor.
+  fs.writeFileSync(AI_DIAG_FILE, '﻿' + parts.join('\r\n'), 'utf8');
+  shell.openPath(AI_DIAG_FILE);
+  return true;
+});
 
 // Folder scanner: baseline snapshot for a task's linked folder (git-aware).
 const SCAN_SCRIPT = path.join(ROOT, 'core', 'scan-folder.ps1');
@@ -840,18 +1112,19 @@ function runCheck(taskId, replan, generate, command) {
   if (replan) args.push('-Replan');
   if (generate) args.push('-Generate');
   if (command) args.push('-Command');
+  const logFile = freshLog(path.join(ROOT, 'core', `check-run-${id}.log`));
   const ps = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
   const run = {
     id, mode, taskId: taskId || null, pid: ps.pid, startedAt: Date.now(),
-    logFile: path.join(ROOT, 'core', `check-run-${id}.log`),
+    logFile,
     killed: false, exclusive: false, est: estimateRun(mode)
   };
   activeRuns.set(id, run);
   broadcastAiStatus();
-  ps.on('error', () => { activeRuns.delete(id); broadcastAiStatus(); });
-  ps.on('exit', async () => {
+  ps.on('error', (err) => { activeRuns.delete(id); reportSpawnFailure(run, err); broadcastAiStatus(); });
+  ps.on('exit', async (code) => {
     activeRuns.delete(id);
-    recordRun(run);
+    recordRun(run, code);
     broadcastAiStatus();
     try { syncFilesToDb(); } catch (e) { /* file fallback still works */ }
     // A comment may have asked for the work itself, not just a new plan.
@@ -875,10 +1148,11 @@ function runAsk(mode, dir) {
     '-File', ASK_SCRIPT, '-Mode', mode, '-RunId', id
   ];
   if (dir) args.push('-Dir', String(dir).slice(0, 500));
+  const logFile = freshLog(path.join(ROOT, 'core', `ask-run-${id}.log`));
   const ps = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
   const run = {
     id, mode, taskId: null, pid: ps.pid, startedAt: Date.now(),
-    logFile: path.join(ROOT, 'core', `ask-run-${id}.log`),
+    logFile,
     killed: false, exclusive: false, est: estimateRun(mode)
   };
   activeRuns.set(id, run);
@@ -890,8 +1164,8 @@ function runAsk(mode, dir) {
       try { win.webContents.send(mode === 'ideas' ? 'ideas:updated' : 'ask:updated'); } catch (e) {}
     }
   };
-  ps.on('error', finish);
-  ps.on('exit', () => { recordRun(run); finish(); });
+  ps.on('error', (err) => { reportSpawnFailure(run, err); finish(); });
+  ps.on('exit', (code) => { recordRun(run, code); finish(); });
   return true;
 }
 
@@ -908,21 +1182,22 @@ function runExecute(taskId) {
   // fighting over the branch) is not a state worth debugging.
   for (const r of activeRuns.values()) if (r.mode === 'execute') return false;
   const runId = crypto.randomUUID().slice(0, 8);
+  const logFile = freshLog(path.join(ROOT, 'core', `execute-run-${runId}.log`));
   const ps = spawn('powershell.exe', [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
     '-File', EXECUTE_SCRIPT, '-TaskId', id, '-RunId', runId
   ], { windowsHide: true, stdio: 'ignore' });
   const run = {
     id: runId, mode: 'execute', taskId: id, pid: ps.pid, startedAt: Date.now(),
-    logFile: path.join(ROOT, 'core', `execute-run-${runId}.log`),
+    logFile,
     killed: false, exclusive: false, est: estimateRun('execute')
   };
   activeRuns.set(runId, run);
   broadcastAiStatus();
-  ps.on('error', () => { activeRuns.delete(runId); broadcastAiStatus(); });
-  ps.on('exit', () => {
+  ps.on('error', (err) => { activeRuns.delete(runId); reportSpawnFailure(run, err); broadcastAiStatus(); });
+  ps.on('exit', (code) => {
     activeRuns.delete(runId);
-    recordRun(run);
+    recordRun(run, code);
     broadcastAiStatus();
     try { syncFilesToDb(); } catch (e) { /* files still serve as fallback */ }
     scheduleReload();
@@ -977,8 +1252,16 @@ function readIdeas() {
   const data = readJson(IDEAS_FILE);
   return {
     entries: data && Array.isArray(data.entries) ? data.entries : [],
-    declined: data && Array.isArray(data.declined) ? data.declined : []
+    declined: data && Array.isArray(data.declined) ? data.declined : [],
+    accepted: data && Array.isArray(data.accepted) ? data.accepted : []
   };
+}
+
+// A card always shows three undecided ideas. Deciding one empties a slot, so
+// the moment it does, a refill run starts for that folder.
+function pendingIdeas(entry) {
+  const ideas = entry && Array.isArray(entry.ideas) ? entry.ideas : [];
+  return ideas.filter((i) => i && i.state === 'new');
 }
 
 function writeIdeas(store) {
@@ -988,15 +1271,20 @@ function writeIdeas(store) {
 ipcMain.handle('ideas:load', () => {
   const store = readIdeas();
   const ig = readIgnore();
-  return { entries: store.entries.filter((e) => !isIgnored(e && e.dir, ig)), declined: store.declined };
+  return {
+    entries: store.entries.filter((e) => !isIgnored(e && e.dir, ig)),
+    declined: store.declined,
+    accepted: store.accepted
+  };
 });
 
 ipcMain.handle('ideas:generate', (ev, dir) => (dir ? runAsk('ideas', String(dir)) : false));
 
 /* Accept -> the renderer has already created the task and passes its id back,
-   so the card can show which suggestion became which task. Decline -> the
-   idea leaves the card and joins the declined list, which every later ideas
-   run reads: the model is told never to propose it again. */
+   so the accepted title is remembered (the model must never propose it again)
+   and the idea leaves the card: a decided suggestion is not a suggestion.
+   Decline -> same, into the declined list. Either way the card drops below
+   three, so a refill run starts right here and the card fills itself back up. */
 ipcMain.handle('ideas:decide', (ev, dir, ideaId, state, taskId) => {
   const store = readIdeas();
   const d = String(dir || '').toLowerCase();
@@ -1008,16 +1296,18 @@ ipcMain.handle('ideas:decide', (ev, dir, ideaId, state, taskId) => {
     const ideas = Array.isArray(e.ideas) ? e.ideas : [];
     ideas.forEach((i) => {
       if (!i || String(i.id) !== id) return;
-      i.state = accepted ? 'accepted' : 'declined';
-      i.taskId = accepted ? String(taskId || '') : '';
-      i.decidedAt = at;
-      if (!accepted) store.declined.push({ dir: e.dir, title: String(i.title || ''), at });
+      const rec = { dir: e.dir, title: String(i.title || ''), at };
+      if (accepted) store.accepted.push(Object.assign({ taskId: String(taskId || '') }, rec));
+      else store.declined.push(rec);
     });
-    if (!accepted) e.ideas = ideas.filter((i) => !i || String(i.id) !== id);
+    e.ideas = ideas.filter((i) => !i || String(i.id) !== id);
   });
   store.declined = store.declined.slice(-300);
+  store.accepted = store.accepted.slice(-300);
   writeIdeas(store);
-  return store;
+  const entry = store.entries.find((e) => String((e && e.dir) || '').toLowerCase() === d);
+  const refilling = pendingIdeas(entry).length < 3 ? runAsk('ideas', String(dir || '')) : false;
+  return Object.assign({ refilling }, store);
 });
 
 /* Analytics: raw file-change events collected by core\monitor.ps1 (no AI)
@@ -1115,19 +1405,22 @@ function runPipeline(force) {
     '-File', PIPELINE, '-NoShow'
   ];
   if (force) args.push('-Force');
+  const logFile = freshLog(path.join(ROOT, 'core', 'last-run.log'));
   const ps = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
   const run = {
     id, mode, taskId: null, pid: ps.pid, startedAt: Date.now(),
-    logFile: path.join(ROOT, 'core', 'last-run.log'),
+    logFile,
     killed: false, exclusive: true, est: estimateRun(mode)
   };
   activeRuns.set(id, run);
   broadcastAiStatus();
-  ps.on('error', () => { pipelineRunning = false; activeRuns.delete(id); broadcastAiStatus(); });
-  ps.on('exit', async () => {
+  ps.on('error', (err) => {
+    pipelineRunning = false; activeRuns.delete(id); reportSpawnFailure(run, err); broadcastAiStatus();
+  });
+  ps.on('exit', async (code) => {
     pipelineRunning = false;
     activeRuns.delete(id);
-    recordRun(run);
+    recordRun(run, code);
     broadcastAiStatus();
     try { syncFilesToDb(); } catch (e) { /* files still serve as fallback */ }
     scheduleReload();
@@ -1207,11 +1500,11 @@ function maybeDailyGenerate() {
   runCheck('', false, true);
 }
 
-/* Feature ideas age with the project. Once every suggestion on a card has
-   been accepted or declined AND the project has actually moved since it was
-   filled (new commit, different dirty count, more changed files), the card is
-   worth refilling. A card that still holds an undecided idea is left alone —
-   regenerating would throw away a suggestion the user has not seen yet.
+/* Feature ideas age with the project. A card is refilled when it holds fewer
+   than three undecided suggestions (a decision usually refills it on the spot;
+   this catches the ones whose refill run never got a slot), or when every
+   suggestion has been decided and the project has actually moved since the
+   card was filled (new commit, different dirty count, more changed files).
    Capped at 3 projects a day, spread out so they don't take the whole
    concurrency pool. */
 function maybeRefreshIdeas() {
@@ -1225,8 +1518,7 @@ function maybeRefreshIdeas() {
   const sig = (p) => `${p.lastCommitAt || ''}|${p.dirtyCount || 0}|${p.changed14d || 0}`;
   const stale = readIdeas().entries.filter((e) => {
     if (!e || !e.dir || isIgnored(e.dir, ig)) return false;
-    const ideas = Array.isArray(e.ideas) ? e.ideas : [];
-    if (ideas.some((i) => i && i.state === 'new')) return false;
+    if (pendingIdeas(e).length < 3) return true;
     const p = reg.projects.find((x) => String((x && x.dir) || '').toLowerCase() === String(e.dir).toLowerCase());
     return !!p && sig(p) !== String(e.signature || '');
   }).slice(0, 3);

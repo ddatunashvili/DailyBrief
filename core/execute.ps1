@@ -21,7 +21,6 @@ $OutputEncoding = [Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
-. (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
@@ -31,6 +30,16 @@ $log       = Join-Path $base ("execute-run-$runToken.log")
 $outPath   = Join-Path $base ("execute-out-$runToken.json")
 $kanbanPath = Join-Path $base 'kanban.json'
 if (Test-Path $outPath) { Remove-Item $outPath -Force }
+
+# Resolved only AFTER the log path exists: when no working claude CLI is
+# installed this throws, and without the catch the script died leaving no log
+# at all - which the app used to journal as a successful run.
+try {
+    . (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
+} catch {
+    [IO.File]::WriteAllText($log, ('[fatal] ' + $_.Exception.Message), $utf8NoBom)
+    exit 3
+}
 
 # git talks on stderr even when it succeeds ("Switched to a new branch"), and
 # under ErrorActionPreference=Stop PowerShell turns that into a terminating

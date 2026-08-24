@@ -333,7 +333,26 @@
     padding: 0.55rem 0.65rem; cursor: pointer;
     box-shadow: 0 1px 2px rgba(0,0,0,0.35);
   }
+  .kb-card { position: relative; }
   .kb-card:hover { border-color: var(--accent); }
+  .kb-copy {
+    position: absolute; top: 0.3rem; right: 0.3rem;
+    background: var(--ground); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--muted); cursor: pointer; padding: 0.15rem 0.25rem; line-height: 0;
+    opacity: 0; transition: opacity 0.12s;
+  }
+  .kb-card:hover .kb-copy { opacity: 1; }
+  .kb-copy:hover { color: var(--accent); border-color: var(--accent); }
+  .kb-copy.ok { color: var(--ok); border-color: var(--ok); opacity: 1; }
+  .kb-copy .ic { width: 12px; height: 12px; }
+  /* completion of a card = its checklist, shown as a bar + percent */
+  .kb-prog { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.45rem; }
+  .kb-prog-track { flex: 1; height: 4px; background: var(--track); border-radius: 99px; overflow: hidden; }
+  .kb-prog-fill { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .kb-prog.full .kb-prog-fill { background: var(--ok); }
+  .kb-prog-pct { font-size: 0.66rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .kb-prog.full .kb-prog-pct { color: var(--ok); }
+  .kb-m-prog { margin-top: 0; }
   .kb-card.dragging { opacity: 0.45; }
   .kb-card.is-done .kb-title { text-decoration: line-through; color: var(--muted); }
   .kb-title { font-weight: 600; font-size: 0.87rem; overflow-wrap: break-word; }
@@ -382,6 +401,15 @@
     border: 1px solid var(--border); border-radius: 8px; padding: 0.3rem 0.5rem;
   }
   .kb-m-by { font-size: 0.74rem; color: var(--muted); }
+  .kb-copy-btn {
+    margin-left: auto; font: inherit; font-size: 0.76rem; cursor: pointer;
+    background: var(--surface); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 8px; padding: 0.28rem 0.55rem;
+    display: inline-flex; align-items: center; gap: 0.3rem;
+  }
+  .kb-copy-btn .ic { width: 12px; height: 12px; }
+  .kb-copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .kb-copy-btn.ok { color: var(--ok); border-color: var(--ok); }
   .kb-m-h {
     font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em;
     text-transform: uppercase; color: var(--muted); margin-top: 0.3rem;
@@ -467,6 +495,38 @@
   .ai-popup-est { margin-top: 0.45rem; font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .ai-popup-row-wrap + .ai-popup-row-wrap { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--border); }
   .ai-popup-more { margin-top: 0.4rem; font-size: 0.7rem; color: var(--muted); }
+  /* AI problem toasts: a failed, incomplete or late run says so out loud. */
+  .ai-toasts {
+    position: fixed; top: 1rem; right: 1rem; z-index: 90;
+    display: flex; flex-direction: column; gap: 0.5rem;
+    width: min(400px, calc(100vw - 2rem));
+  }
+  .ai-toast {
+    background: var(--surface); border: 1px solid var(--crit); border-left-width: 4px;
+    border-radius: 10px; padding: 0.6rem 0.75rem; box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+  }
+  .ai-toast.warn { border-color: var(--warn); }
+  .ai-toast-head { display: flex; justify-content: space-between; gap: 0.6rem; align-items: baseline; }
+  .ai-toast-title { font-size: 0.78rem; font-weight: 700; color: var(--crit); }
+  .ai-toast.warn .ai-toast-title { color: var(--warn); }
+  .ai-toast-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.9rem; line-height: 1; }
+  .ai-toast-msg { margin-top: 0.3rem; font-size: 0.8rem; }
+  .ai-toast-actions { margin-top: 0.45rem; display: flex; gap: 0.4rem; }
+  .ai-toast-btn {
+    background: none; border: 1px solid var(--border); color: var(--fg);
+    border-radius: 7px; padding: 0.2rem 0.5rem; font-size: 0.72rem; cursor: pointer;
+  }
+  .ai-toast-btn:hover { border-color: var(--accent); }
+  .ai-prob-row {
+    display: grid; grid-template-columns: 8.5rem 1fr auto; gap: 0.6rem;
+    padding: 0.4rem 0; border-bottom: 1px solid var(--border); font-size: 0.78rem; align-items: baseline;
+  }
+  .ai-prob-row:last-child { border-bottom: none; }
+  .ai-prob-row .c { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ai-prob-error { color: var(--crit); font-size: 0.72rem; font-weight: 700; }
+  .ai-prob-warn { color: var(--warn); font-size: 0.72rem; font-weight: 700; }
+  .ai-run-status-failed, .ai-run-status-timeout { color: var(--crit); font-size: 0.72rem; font-weight: 700; }
+  .ai-run-status-incomplete, .ai-run-status-partial, .ai-run-status-thin { color: var(--warn); font-size: 0.72rem; font-weight: 700; }
 
   .kb-archive { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
   .kb-archive-item { font-size: 0.82rem; color: var(--muted); padding: 0.25rem 0; }
@@ -686,6 +746,13 @@
       </section>
       <div class="an-tiles" id="ai-tiles"></div>
       <section class="an-section">
+        <h2>ხარვეზები და დაყოვნებები</h2>
+        <div id="ai-problems"></div>
+        <div style="margin-top:0.7rem;">
+          <button class="kb-btn ghost" id="ai-diag-btn" title="ბოლო ხარვეზები + ლოგები ერთ ტექსტურ ფაილში — გასაგზავნად">დიაგნოსტიკის ფაილი (TXT)</button>
+        </div>
+      </section>
+      <section class="an-section">
         <h2>გაშვებების ისტორია</h2>
         <div id="ai-runs"></div>
       </section>
@@ -711,30 +778,76 @@
 */
 /*BRIEF-DATA-START*/
 const BRIEF = {
-  "date": "2026-01-01",
-  "dateLabel": "სადემო მონაცემები — რეალურს pipeline წერს",
-  "tldr": "ეს სადემო ბრიფინგია. დილის გაშვება ამ ბლოკს ავტომატურად ჩაანაცვლებს რეალური მონაცემებით.",
+  "date": "2026-08-24",
+  "dateLabel": "24 აგვისტო, ორშაბათი",
+  "tldr": "CHITI web და mobile 5 დღეა Initial commit-ზე გაყინულია, ბექენდი კი ყოველდღიურად ვითარდება — დღეს ორივეს პირველი commit სჭირდება. RENODE PANEL-ზე backup-pull ლოგ-როტაცია ფაქტობრივად დასრულდა, დახურვაღა დარჩა. mail driver TODO მე-4 დღეა უგულებელყოფილია.",
   "tasks": [
     {
-      "id": "demo-task",
-      "title": "სადემო ამოცანა",
-      "desc": "აღწერის მაგალითი.",
-      "weight": 100,
-      "badge": "100% დროის"
+      "id": "chiti-web-forms",
+      "title": "CHITI web — ფორმების ვალიდაცია",
+      "desc": "**ChitiWeb** 5 დღეა Initial commit-ზეა (08-19). `ProjRegForm`/`ProjEditForm`/`ServiceRegisterForm`/`ServiceEditForm` ვალიდაცია დაუსრულებელია. დღეს საჭირო პირველი რეალური commit.",
+      "weight": 30,
+      "badge": "30% დროის"
+    },
+    {
+      "id": "chiti-mobile-build",
+      "title": "CHITI mobile — Android build",
+      "desc": "**CHITIApp** ასევე 5 დღეა Initial commit-ზეა. scaffold მზადაა (`build.gradle`, `MainActivity.kt`), საჭიროა Expo dev build-ის ერთი რეალური მცდელობა ფიზიკურ მოწყობილობაზე.",
+      "weight": 25,
+      "badge": "25% დროის"
+    },
+    {
+      "id": "umt0yas07u52f",
+      "title": "RENODE PANEL — Deploy History route + retention",
+      "desc": "`deploy_logs` migration, log-ჩაწერა და React კომპონენტი მზადაა 08-20-დან, მაგრამ `RouteServiceProvider.php`-ში route-ის რეგისტრაცია და retention job კვლავ pending-ია.",
+      "weight": 20,
+      "badge": "20% დროის"
+    },
+    {
+      "id": "umt0977k1d79m",
+      "title": "backup-pull ლოგ-როტაციის საბოლოო დახურვა",
+      "desc": "08-23-ს `feat(backup): a log kept to the same week the archives are` დაკომიტდა — სამუშაო ფაქტობრივად დასრულებულია. დარჩა `.backup-pull-state.json` ვალიდაცია და tray-ისტორიის ტესტი, შემდეგ დახურვა.",
+      "weight": 15,
+      "badge": "15% დროის"
+    },
+    {
+      "id": "umt097bresnqi",
+      "title": "InfoCommand.php mail driver TODO",
+      "desc": "მე-4 ზედიზედ დღეა ხელუხლებელი, მიუხედავად ყოველდღიური RENODE commit-ებისა. 4-ხაზიანი, `config('mail.default')`-ზე დაფუძნებული ტრივიალური fix — დღეს დახურე.",
+      "weight": 10,
+      "badge": "10% დროის"
     }
   ],
   "warnings": [
     {
+      "sev": "crit",
+      "label": "CHITI web/mobile გაყინული",
+      "text": "**ChitiWeb** და **CHITIApp** 5 დღეა (08-19-დან) Initial commit-ზეა, ChitiBackend-ის ყოველდღიური განვითარების პარალელურად."
+    },
+    {
+      "sev": "warn",
+      "label": "mail driver TODO",
+      "text": "`InfoCommand.php:61` TODO მე-4 დღეა იგნორირებულია, მიუხედავად RENODE PANEL-ის ყოველდღიური commit-ებისა."
+    },
+    {
+      "sev": "warn",
+      "label": "Deploy History pending",
+      "text": "Route-ის რეგისტრაცია და retention job 08-20-დან pending-ია, ყურადღება სხვა RENODE ფუნქციებზე გადავიდა."
+    },
+    {
       "sev": "note",
-      "label": "ინფო",
-      "text": "გაფრთხილებების მაგალითი."
+      "label": "backup-pull დახურვისთვის მზადაა",
+      "text": "ლოგ-როტაცია commit-ით (08-23) ფაქტობრივად დასრულდა — მხოლოდ დაფის დახურვაა დარჩენილი."
     }
   ],
   "recap": [
-    "აქტივობის შეჯამების მაგალითი."
+    "RENODE PANEL: 08-23-ს backup-pull ლოგ-როტაცია დაკომიტდა, root რეფაქტორი (`ops/`, `docs/legacy`) დასრულდა.",
+    "ChitiBackend: 08-24-ს placeholder სურათები shop/product-ებზე, 08-23-ს backend fix PR merge.",
+    "CHITI ბექენდის `main`-ში merge (roadmap, compat layer, Prisma 7) 08-20-ს დასრულდა — დახურულია."
   ],
   "assessment": [
-    "შეფასების მაგალითი."
+    "ნაწილობრივ არასწორია. RENODE PANEL-ზე ყოველდღიური commit-ები გრძელდება ახალ ფუნქციებზე (backup, database-ზომები, dashboards), მაგრამ ორი მცირე დავალება (mail driver TODO, Deploy History route) გვერდზე გაჩერებულია.",
+    "ამავე დროს ChitiWeb და CHITIApp — ახალი, \"important\" სტატუსის მქონე პროდუქტის ხაზი — უკვე 5 დღეა სრულად გაყინულია. ეს აქტიური არჩევანია, არა ბუნებრივი კლება: ყოველდღიური დრო RENODE-ის დახვეწას სთმობ CHITI-ს ახალი ნაწილების ხარჯზე. თუ CHITI web/mobile რეალურად პრიორიტეტულია, დღეს მინიმუმ ერთი commit საჭიროა ორივეში."
   ]
 };
 /*BRIEF-DATA-END*/
@@ -770,7 +883,8 @@ const BRIEF = {
     search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
     replan: '<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',
     plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
-    play: '<polygon points="5 3 19 12 5 21 5 3"/>'
+    play: '<polygon points="5 3 19 12 5 21 5 3"/>',
+    copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'
   };
   function icon(name) {
     return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICONS[name] || "") + '</svg>';
@@ -956,6 +1070,81 @@ const BRIEF = {
 
   var dragging = false;
 
+  /* Completion is the checklist: a task with no subtasks is 0% until it is
+     moved to "done", which counts as 100%. */
+  function taskProgress(t) {
+    var subs = t.subtasks || [];
+    if (!subs.length) return { done: 0, total: 0, pct: t.done ? 100 : 0 };
+    var done = subs.filter(function (s) { return s.done; }).length;
+    if (t.done) done = subs.length;
+    return { done: done, total: subs.length, pct: Math.round((done / subs.length) * 100) };
+  }
+
+  function progressBar(t, extraCls) {
+    var pr = taskProgress(t);
+    var box = el("div", "kb-prog" + (pr.pct === 100 ? " full" : "") + (extraCls ? " " + extraCls : ""),
+      '<span class="kb-prog-track"><span class="kb-prog-fill" style="width:' + pr.pct + '%"></span></span>' +
+      '<span class="kb-prog-pct">' + pr.pct + "%" + (pr.total ? " · " + pr.done + "/" + pr.total : "") + "</span>");
+    return box;
+  }
+
+  /* One task as plain text, shaped to be pasted straight into an AI prompt:
+     title, status, folders, description, checklist, progress. */
+  function taskCopyText(t) {
+    var pr = taskProgress(t);
+    var col = KB_COLS.filter(function (c) { return c.key === (t.done ? "done" : (t.status || "planning")); })[0];
+    var lines = [];
+    lines.push("# " + String(t.title || ""));
+    lines.push("სტატუსი: " + ((col && col.label) || "") + (t.done ? " (დასრულებული)" : ""));
+    lines.push("პროგრესი: " + pr.pct + "%" + (pr.total ? " (" + pr.done + "/" + pr.total + " ქვეტასკი)" : ""));
+    if ((t.dirs || []).length) {
+      lines.push("");
+      lines.push("ფოლდერები:");
+      t.dirs.forEach(function (d) { lines.push("- " + d); });
+    }
+    if (t.desc) {
+      lines.push("");
+      lines.push("აღწერა:");
+      lines.push(String(t.desc));
+    }
+    if ((t.subtasks || []).length) {
+      lines.push("");
+      lines.push("ქვეტასკები:");
+      t.subtasks.forEach(function (st) {
+        lines.push("- [" + (st.done || t.done ? "x" : " ") + "] " + String(st.text || ""));
+      });
+    }
+    return lines.join("\n");
+  }
+
+  function copyTaskToClipboard(t, btn) {
+    var text = taskCopyText(t);
+    function done(ok) {
+      if (!btn) return;
+      btn.classList.toggle("ok", ok);
+      btn.title = ok ? "დაკოპირდა" : "კოპირება ვერ მოხერხდა";
+      setTimeout(function () {
+        btn.classList.remove("ok");
+        btn.title = "ტასკის კოპირება (AI პრომპტისთვის)";
+      }, 1400);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+      return;
+    }
+    // file:// without a secure context: the textarea trick still works.
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    ta.remove();
+    done(ok);
+  }
+
   function buildCard(t) {
     var badges = [];
     if (t.createdBy === "ai") badges.push('<span class="kb-chip kb-chip-ai">AI</span>');
@@ -970,6 +1159,16 @@ const BRIEF = {
     var card = el("div", "kb-card" + (t.done ? " is-done" : ""),
       '<div class="kb-title">' + md(t.title) + '</div>' +
       (badges.length ? '<div class="kb-badges">' + badges.join("") + '</div>' : ''));
+    if ((t.subtasks || []).length || t.done) card.appendChild(progressBar(t));
+    var copyBtn = el("button", "kb-copy", icon("copy"));
+    copyBtn.title = "ტასკის კოპირება (AI პრომპტისთვის)";
+    copyBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      copyTaskToClipboard(t, copyBtn);
+    });
+    copyBtn.draggable = false;
+    copyBtn.addEventListener("dragstart", function (e) { e.preventDefault(); e.stopPropagation(); });
+    card.appendChild(copyBtn);
     card.draggable = true;
     card.addEventListener("dragstart", function (e) {
       dragging = true;
@@ -1120,12 +1319,24 @@ const BRIEF = {
       if (sel.value === "done") { t.done = true; }
       else { t.done = false; t.status = sel.value; }
       t.updatedAt = nowISO();
-      saveKb(); renderKanban();
+      saveKb(); renderKanban(); paintProg();
     });
     meta.appendChild(sel);
     meta.appendChild(el("span", "kb-m-by",
       (t.createdBy === "ai" ? "შექმნა AI-მ" : "შენ შექმენი") + " · " + md(shortAt(t.createdAt))));
+    var mCopy = el("button", "kb-copy-btn", icon("copy") + "კოპირება");
+    mCopy.title = "სათაური, ფოლდერები, აღწერა და ჩეკლისტი — ტექსტად, AI პრომპტისთვის";
+    mCopy.addEventListener("click", function () { copyTaskToClipboard(t, mCopy); });
+    meta.appendChild(mCopy);
     m.appendChild(meta);
+
+    var progWrap = el("div", "kb-m-progwrap");
+    function paintProg() {
+      progWrap.innerHTML = "";
+      progWrap.appendChild(progressBar(t, "kb-m-prog"));
+    }
+    paintProg();
+    m.appendChild(progWrap);
 
     m.appendChild(el("div", "kb-m-h", "აღწერა"));
     var desc = document.createElement("textarea");
@@ -1153,12 +1364,12 @@ const BRIEF = {
         row.querySelector("input").addEventListener("change", function (ev) {
           t.subtasks[idx].done = ev.target.checked;
           t.updatedAt = nowISO();
-          saveKb(); paintSubtasks(); renderKanban();
+          saveKb(); paintSubtasks(); paintProg(); renderKanban();
         });
         row.querySelector(".kb-dir-del").addEventListener("click", function () {
           t.subtasks.splice(idx, 1);
           t.updatedAt = nowISO();
-          saveKb(); paintSubtasks(); renderKanban();
+          saveKb(); paintSubtasks(); paintProg(); renderKanban();
         });
         stBox.appendChild(row);
       });
@@ -1171,7 +1382,7 @@ const BRIEF = {
         t.subtasks = t.subtasks || [];
         t.subtasks.push({ text: txt, done: false });
         t.updatedAt = nowISO();
-        saveKb(); paintSubtasks(); renderKanban();
+        saveKb(); paintSubtasks(); paintProg(); renderKanban();
         stBox.querySelector(".kb-cin input").focus();
       }
       addRow.querySelector("button").addEventListener("click", addSub);
@@ -1628,6 +1839,13 @@ const BRIEF = {
     });
   }
 
+  var aiDiagBtn = document.getElementById("ai-diag-btn");
+  if (aiDiagBtn) {
+    aiDiagBtn.addEventListener("click", function () {
+      if (api && api.aiOpenDiagnostics) api.aiOpenDiagnostics();
+    });
+  }
+
   async function renderAiPage() {
     if (!api || !api.aiRuns) return;
     var curEl = document.getElementById("ai-current");
@@ -1688,6 +1906,8 @@ const BRIEF = {
       tilesEl.appendChild(el("div", "an-tile", '<div class="v">' + md(t.v) + '</div><div class="k">' + md(t.k) + '</div>'));
     });
 
+    renderAiProblems();
+
     var runsEl = document.getElementById("ai-runs");
     runsEl.innerHTML = "";
     if (!runs.length) {
@@ -1701,14 +1921,23 @@ const BRIEF = {
         ? (r.inputTokens || 0).toLocaleString() + " / " + (r.outputTokens || 0).toLocaleString()
         : "—";
       var cost = r.costUsd ? "$" + r.costUsd.toFixed(3) : "—";
-      var statusCls = r.status === "killed" ? "killed" : (r.status === "skipped" ? "skipped" : "ok");
-      var statusLabel = r.status === "killed" ? "გათიშული" : (r.status === "skipped" ? "გამოტოვებული" : "OK");
-      runsEl.appendChild(el("div", "ai-run-row",
+      var RUN_STATUS = {
+        killed: "გათიშული", skipped: "გამოტოვებული", failed: "ჩავარდა",
+        timeout: "ტაიმაუტი", incomplete: "არასრული", partial: "ნაწილობრივი",
+        thin: "მოკლე პასუხი", ok: "OK"
+      };
+      var statusCls = RUN_STATUS[r.status] ? r.status : "ok";
+      var statusLabel = RUN_STATUS[r.status] || "OK";
+      var row = el("div", "ai-run-row",
         '<span class="c">' + md(when) + '</span>' +
         '<span>' + md(modeLabel(r.mode)) + '</span>' +
         '<span class="c">' + md(dur) + '</span>' +
         '<span class="c" title="input / output ტოკენები">' + md(tok) + ' · ' + md(cost) + '</span>' +
-        '<span class="ai-run-status-' + statusCls + '">' + statusLabel + '</span>'));
+        '<span class="ai-run-status-' + statusCls + '"></span>');
+      var st = row.querySelector("span:last-child");
+      st.textContent = statusLabel;
+      if (r.message) st.title = r.message;
+      runsEl.appendChild(row);
     });
   }
 
@@ -1805,7 +2034,9 @@ const BRIEF = {
   }
 
   var projectsCache = { generatedAt: null, projects: [] };
-  var ideasCache = { entries: [], declined: [] };
+  var ideasCache = { entries: [], declined: [], accepted: [] };
+  // dir -> true while a refill run for that folder is in flight.
+  var ideasRefilling = {};
 
   function ideaEntry(dir) {
     var d = String(dir || "").toLowerCase();
@@ -1831,47 +2062,51 @@ const BRIEF = {
     saveKb();
     if (api && api.scanFolder) api.scanFolder(t.id, p.dir);
     ideasCache = await api.ideasDecide(p.dir, idea.id, "accepted", t.id);
+    ideasRefilling[String(p.dir).toLowerCase()] = !!(ideasCache && ideasCache.refilling);
     renderKanban();
     renderProjectsPage();
   }
 
   async function declineIdea(p, idea) {
     ideasCache = await api.ideasDecide(p.dir, idea.id, "declined", "");
+    ideasRefilling[String(p.dir).toLowerCase()] = !!(ideasCache && ideasCache.refilling);
     renderProjectsPage();
   }
 
   function ideasBox(p, entry) {
     var box = el("div", null);
-    var ideas = arr(entry.ideas);
+    // Only undecided suggestions belong on a card: an accepted one is a task
+    // now, a declined one is gone, and the empty slot is being refilled.
+    var ideas = arr(entry.ideas).filter(function (i) { return i && i.state === "new"; });
     box.appendChild(el("div", "idea-head",
       "AI-ის შემოთავაზებები · " + md(entry.generatedAt || "")));
-    if (!ideas.length) {
-      box.appendChild(el("div", "idea-why", "ყველა შემოთავაზება განხილულია — „ახალი იდეები“ ახლებს დაწერს."));
-      return box;
-    }
     ideas.forEach(function (idea) {
-      var row = el("div", "idea" + (idea.state === "accepted" ? " accepted" : ""));
+      var row = el("div", "idea");
       row.appendChild(el("div", "idea-title",
         md(String(idea.title || "")) + (idea.effort ? '<span class="idea-eff">' + md(String(idea.effort)) + "</span>" : "")));
       if (idea.desc) row.appendChild(el("div", "idea-desc", md(String(idea.desc))));
       if (idea.why) row.appendChild(el("div", "idea-why", md(String(idea.why))));
       var subs = arr(idea.subtasks);
       if (subs.length) row.appendChild(el("div", "idea-subs", md(subs.map(String).join(" · "))));
-      if (idea.state === "accepted") {
-        row.appendChild(el("div", "idea-why", "მიღებულია — ტასკი შექმნილია."));
-      } else {
-        var acts = el("div", "idea-acts");
-        var yes = el("button", "kb-btn", "მიღება — ტასკად");
-        yes.addEventListener("click", function () { acceptIdea(p, idea); });
-        acts.appendChild(yes);
-        var no = el("button", "kb-btn ghost", "უარყოფა");
-        no.title = "აღარ შემოგთავაზებს — უარყოფილი იდეები ყოველ მომდევნო გაშვებაში ეგზავნება მოდელს, როგორც აკრძალული სია";
-        no.addEventListener("click", function () { declineIdea(p, idea); });
-        acts.appendChild(no);
-        row.appendChild(acts);
-      }
+      var acts = el("div", "idea-acts");
+      var yes = el("button", "kb-btn", "მიღება — ტასკად");
+      yes.addEventListener("click", function () { acceptIdea(p, idea); });
+      acts.appendChild(yes);
+      var no = el("button", "kb-btn ghost", "უარყოფა");
+      no.title = "აღარ შემოგთავაზებს — უარყოფილი იდეები ყოველ მომდევნო გაშვებაში ეგზავნება მოდელს, როგორც აკრძალული სია";
+      no.addEventListener("click", function () { declineIdea(p, idea); });
+      acts.appendChild(no);
+      row.appendChild(acts);
       box.appendChild(row);
     });
+    // A decision empties a slot and main.js starts the refill immediately —
+    // say so, otherwise the card just looks short of ideas.
+    if (ideas.length < 3) {
+      box.appendChild(el("div", "idea-why",
+        ideasRefilling[String(p.dir).toLowerCase()]
+          ? "AI ახალ იდეას წერს — ბარათი თავად შეივსება 3-მდე…"
+          : "ნაკლებია 3-ზე — „ახალი იდეები“ შეავსებს."));
+    }
     return box;
   }
 
@@ -1942,7 +2177,7 @@ const BRIEF = {
     }
     if (api && api.ideasGenerate) {
       var ideaBtn = el("button", "kb-btn ghost", entry ? "ახალი იდეები" : "იდეები (3)");
-      ideaBtn.title = "AI შემოგთავაზებს 3 ახალ ფუნქციას სწორედ ამ პროექტისთვის; მიღება ტასკს შექმნის, უარყოფა კი სამუდამოდ მოხსნის";
+      ideaBtn.title = "ბარათზე ყოველთვის 3 ღია შემოთავაზებაა: მიღება ტასკს შექმნის, უარყოფა სამუდამოდ მოხსნის, დარჩენილი ადგილი კი ახალი იდეით ივსება";
       ideaBtn.addEventListener("click", async function () {
         var label = ideaBtn.textContent;
         ideaBtn.disabled = true;
@@ -1977,7 +2212,7 @@ const BRIEF = {
     }
     if (!projectsCache.projects.length) list.innerHTML = '<div class="an-empty">იტვირთება…</div>';
     projectsCache = (await api.projectsLoad()) || { generatedAt: null, projects: [] };
-    if (api.ideasLoad) ideasCache = (await api.ideasLoad()) || { entries: [], declined: [] };
+    if (api.ideasLoad) ideasCache = (await api.ideasLoad()) || { entries: [], declined: [], accepted: [] };
     var ps = arr(projectsCache.projects);
     document.getElementById("projects-sub").textContent = ps.length
       ? ps.length + " პროექტი · განახლდა " + (projectsCache.generatedAt || "—")
@@ -2004,7 +2239,11 @@ const BRIEF = {
 
   if (api && api.onIdeasUpdated) {
     try {
-      api.onIdeasUpdated(function () { if (!views.projects.hidden) renderProjectsPage(); });
+      api.onIdeasUpdated(function () {
+        // Whatever run just finished, no refill is still in flight for it.
+        ideasRefilling = {};
+        if (!views.projects.hidden) renderProjectsPage();
+      });
     } catch (e) {}
   }
 
@@ -2364,6 +2603,113 @@ const BRIEF = {
   aiPopup.hidden = true;
   document.body.appendChild(aiPopup);
 
+  /* ---- AI problems: failed / incomplete / late runs ---- */
+
+  var aiToasts = el("div", "ai-toasts");
+  document.body.appendChild(aiToasts);
+
+  var PROB_TITLE = {
+    failed: "AI გაშვება ჩავარდა",
+    timeout: "AI ვერ დაასრულა (ტაიმაუტი)",
+    incomplete: "AI-მ დავალება ბოლომდე ვერ მიიყვანა",
+    partial: "AI-ს პასუხი ნაწილობრივ დაიკარგა",
+    thin: "AI-ს პასუხი არასრულია",
+    slow: "AI იგვიანებს",
+    ok: "AI დაგვიანებით დასრულდა"
+  };
+
+  function probTitle(p) {
+    return (PROB_TITLE[p.status] || "AI ხარვეზი") + " · " + modeLabel(p.mode);
+  }
+
+  // Text nodes, never innerHTML: these strings carry raw CLI error output.
+  function showAiToast(p) {
+    var box = el("div", "ai-toast" + (p.level === "warn" ? " warn" : ""));
+    var head = el("div", "ai-toast-head");
+    var title = el("span", "ai-toast-title");
+    title.textContent = probTitle(p);
+    var close = el("button", "ai-toast-close", "&times;");
+    close.title = "დახურვა";
+    close.addEventListener("click", function () { box.remove(); });
+    head.appendChild(title);
+    head.appendChild(close);
+    box.appendChild(head);
+    var msg = el("div", "ai-toast-msg");
+    msg.textContent = p.message || "";
+    box.appendChild(msg);
+    var actions = el("div", "ai-toast-actions");
+    var diag = el("button", "ai-toast-btn", "დეტალები (TXT)");
+    diag.addEventListener("click", function () {
+      if (api && api.aiOpenDiagnostics) api.aiOpenDiagnostics();
+    });
+    actions.appendChild(diag);
+    var page = el("button", "ai-toast-btn", "AI გვერდი");
+    page.addEventListener("click", function () { showView("ai"); box.remove(); });
+    actions.appendChild(page);
+    box.appendChild(actions);
+    aiToasts.appendChild(box);
+    // A late-run warning is informational; a failure stays until dismissed.
+    if (p.level === "warn") setTimeout(function () { box.remove(); }, 20000);
+    while (aiToasts.children.length > 4) aiToasts.firstChild.remove();
+  }
+
+  // Problems raised while the app was closed (or before a run-triggered page
+  // reload) still deserve to be seen once.
+  async function replayMissedProblems() {
+    if (!api || !api.aiProblems) return;
+    var list = [];
+    try { list = await api.aiProblems(); } catch (e) { return; }
+    if (!Array.isArray(list) || !list.length) return;
+    var seen = "";
+    try { seen = localStorage.getItem("dailybrief-problem-seen") || ""; } catch (e) {}
+    var fresh = [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].at === seen) break;
+      // Anything older than a day is history, not news.
+      if (Date.now() - new Date(list[i].at).getTime() > 86400000) break;
+      fresh.push(list[i]);
+    }
+    try { localStorage.setItem("dailybrief-problem-seen", list[0].at); } catch (e) {}
+    fresh.slice(0, 3).reverse().forEach(showAiToast);
+  }
+
+  if (api && api.onAiProblem) {
+    try {
+      api.onAiProblem(function (p) {
+        if (!p) return;
+        try { localStorage.setItem("dailybrief-problem-seen", p.at); } catch (e) {}
+        showAiToast(p);
+        if (typeof views !== "undefined" && views.ai && !views.ai.hidden) renderAiProblems();
+      });
+    } catch (e) {}
+  }
+
+  async function renderAiProblems() {
+    var box = document.getElementById("ai-problems");
+    if (!box || !api || !api.aiProblems) return;
+    var list = [];
+    try { list = await api.aiProblems(); } catch (e) {}
+    box.innerHTML = "";
+    if (!Array.isArray(list) || !list.length) {
+      box.appendChild(el("div", "an-empty", "ხარვეზი არ დაფიქსირებულა — ყველა გაშვება სუფთად დასრულდა."));
+      return;
+    }
+    list.slice(0, 25).forEach(function (p) {
+      var row = el("div", "ai-prob-row");
+      var when = el("span", "c");
+      when.textContent = String(p.at || p.start || "").slice(5, 16).replace("T", " ") + " · " + modeLabel(p.mode);
+      var msg = el("span");
+      msg.textContent = p.message || "";
+      if (p.detail) msg.title = String(p.detail).slice(0, 500);
+      var lvl = el("span", p.level === "warn" ? "ai-prob-warn" : "ai-prob-error");
+      lvl.textContent = String(p.status || "").toUpperCase();
+      row.appendChild(when);
+      row.appendChild(msg);
+      row.appendChild(lvl);
+      box.appendChild(row);
+    });
+  }
+
   function fmtTok(n) {
     n = n || 0;
     return n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(n);
@@ -2439,6 +2785,9 @@ const BRIEF = {
     initElectron();
     // The AI's open questions live above the briefing.
     renderQuestions();
+    // A run that failed while the window was closed (or just before the reload
+    // an AI run triggers) is announced once, on the next start.
+    replayMissedProblems();
     // Restore the last open view after reloads (AI runs reload the page).
     try {
       var savedView = localStorage.getItem("dailybrief-view");

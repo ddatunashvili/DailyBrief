@@ -24,7 +24,6 @@ $OutputEncoding = [Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
-. (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
@@ -60,6 +59,16 @@ $log        = Join-Path $base ("check-run-$runToken.log")
 $digestPath = Join-Path $base ("check-digest-$runToken.json")
 $patchPath  = Join-Path $base ("check-patch-$runToken.json")
 if (Test-Path $patchPath) { Remove-Item $patchPath -Force }
+
+# Resolved only AFTER the log path exists: when no working claude CLI is
+# installed this throws, and without the catch the script died leaving no log
+# at all - which the app used to journal as a successful run.
+try {
+    . (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
+} catch {
+    [IO.File]::WriteAllText($log, ('[fatal] ' + $_.Exception.Message), $utf8NoBom)
+    exit 3
+}
 
 # ---------- Build the compressed digest (script-side, zero AI tokens) ----------
 $kanbanPath = Join-Path $base 'kanban.json'
@@ -576,6 +585,11 @@ if (Test-Path $patchPath) {
         if ($gotLock) { $mutex.ReleaseMutex() }
         $mutex.Dispose()
     }
+} else {
+    # The prompt asks for the patch file unconditionally - even "nothing
+    # changed" is written as {"updates":[]}. No file at all means the model
+    # stopped early (turn limit, refusal, crash) and this run changed nothing.
+    Add-Content $log '[warn] model wrote no output file'
 }
 
 # A comment that orders the work to actually be DONE (not re-planned) comes

@@ -19,7 +19,14 @@ $base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
 $today  = Get-Date -Format 'yyyy-MM-dd'
 $brief  = Join-Path $base "briefings\$today.md"
 $log    = Join-Path $base 'last-run.log'
-. (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
+try {
+    . (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
+} catch {
+    # No working claude CLI: leave a log, or the app journals a run that never
+    # happened as a success.
+    [IO.File]::WriteAllText($log, ('[fatal] ' + $_.Exception.Message), (New-Object Text.UTF8Encoding $false))
+    exit 3
+}
 
 function Show-Brief([string]$Path) {
     Start-Process powershell.exe -ArgumentList @(
@@ -33,6 +40,10 @@ if (Test-Path $brief) {
     if ($Force) {
         Remove-Item $brief -Force
     } else {
+        # Nothing to do today. Written down on purpose: an early exit that
+        # left last-run.log untouched made the app re-journal the PREVIOUS
+        # run's tokens and cost as a brand new successful run.
+        [IO.File]::WriteAllText($log, 'skipped: brief for today already exists - zero AI tokens spent', (New-Object Text.UTF8Encoding $false))
         if (-not $NoShow) { Show-Brief $brief }
         exit 0
     }

@@ -22,7 +22,6 @@ $OutputEncoding = [Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
-. (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
@@ -32,6 +31,16 @@ $log        = Join-Path $base ("ask-run-$runToken.log")
 $digestPath = Join-Path $base ("ask-digest-$runToken.json")
 $outPath    = Join-Path $base ("ask-out-$runToken.json")
 if (Test-Path $outPath) { Remove-Item $outPath -Force }
+
+# Resolved only AFTER the log path exists: when no working claude CLI is
+# installed this throws, and without the catch the script died leaving no log
+# at all - which the app used to journal as a successful run.
+try {
+    . (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
+} catch {
+    [IO.File]::WriteAllText($log, ('[fatal] ' + $_.Exception.Message), $utf8NoBom)
+    exit 3
+}
 
 $askLogPath = Join-Path $base 'ask-log.json'
 $ideasPath  = Join-Path $base 'ideas.json'
@@ -240,16 +249,24 @@ else {
 
     # Everything already suggested for this folder, so the model cannot serve
     # the same idea twice - declined ones are the important half.
-    $declined = @(); $accepted = @()
+    $declined = @(); $accepted = @(); $pending = @()
     $store = Read-Json $ideasPath
     if ($store) {
         $declined = @(AsArr $store.declined | Where-Object { (Norm ([string]$_.dir)) -eq (Norm $Dir) } |
             ForEach-Object { [string]$_.title } | Select-Object -Last 25)
+        $accepted = @(AsArr $store.accepted | Where-Object { (Norm ([string]$_.dir)) -eq (Norm $Dir) } |
+            ForEach-Object { [string]$_.title } | Select-Object -Last 25)
         foreach ($e in @(AsArr $store.entries)) {
             if ((Norm ([string]$e.dir)) -ne (Norm $Dir)) { continue }
-            $accepted = @(AsArr $e.ideas | Where-Object { [string]$_.state -eq 'accepted' } |
+            # Older files kept accepted ideas on the card itself.
+            $accepted += @(AsArr $e.ideas | Where-Object { [string]$_.state -eq 'accepted' } |
+                ForEach-Object { [string]$_.title })
+            # Still on the card and undecided: these stay, so they must not be
+            # proposed a second time by this run.
+            $pending = @(AsArr $e.ideas | Where-Object { [string]$_.state -eq 'new' } |
                 ForEach-Object { [string]$_.title })
         }
+        $accepted = @($accepted | Select-Object -Unique)
     }
 
     $digest = @{
@@ -260,6 +277,7 @@ else {
     Add-IfAny $digest 'openTasks' (Tasks-For $Dir)
     Add-IfAny $digest 'declined' $declined
     Add-IfAny $digest 'accepted' $accepted
+    Add-IfAny $digest 'pending' $pending
     # -Compress on purpose: pretty-printed PS JSON is ~2x the bytes, and every
     # one of those indent spaces is a token the question pays for.
     [IO.File]::WriteAllText($digestPath, ($digest | ConvertTo-Json -Depth 6 -Compress), $utf8NoBom)
@@ -348,22 +366,28 @@ else {
     try {
         $got = $mutex.WaitOne(30000)
         $fresh = Read-Json $ideasPath
-        $entries = @(); $declinedAll = @()
+        $entries = @(); $declinedAll = @(); $acceptedAll = @()
         if ($fresh) {
             $entries = @(AsArr $fresh.entries | Where-Object { (Norm ([string]$_.dir)) -ne (Norm $Dir) })
             $declinedAll = @(AsArr $fresh.declined)
+            $acceptedAll = @(AsArr $fresh.accepted)
         }
-        # Accepted ideas survive a regeneration - they are already tasks, and
-        # the card should keep showing what it was that got accepted.
+        # Undecided ideas survive a regeneration - the user has not seen an
+        # answer to them yet. Only the empty slots are refilled, so the card
+        # always holds exactly three open suggestions. Decided ones are gone
+        # from the card; their titles live in accepted/declined.
         $keep = @()
         if ($fresh) {
             foreach ($e in @(AsArr $fresh.entries)) {
                 if ((Norm ([string]$e.dir)) -ne (Norm $Dir)) { continue }
-                $keep = @(AsArr $e.ideas | Where-Object { [string]$_.state -eq 'accepted' })
+                $keep = @(AsArr $e.ideas | Where-Object { [string]$_.state -eq 'new' } | Select-Object -First 3)
             }
         }
+        $need = 3 - @($keep).Count
+        if ($need -lt 0) { $need = 0 }
         $i = 0
-        $newIdeas = @(AsArr $out.ideas | Select-Object -First 3 | ForEach-Object {
+        $newIdeas = @()
+        if ($need -gt 0) { $newIdeas = @(AsArr $out.ideas | Select-Object -First $need | ForEach-Object {
             $i++
             New-Object PSObject -Property @{
                 id = ('{0}-{1}' -f $runToken, $i)
@@ -376,7 +400,7 @@ else {
                 at = $stamp
                 taskId = ''
             }
-        })
+        }) }
         $entries += (New-Object PSObject -Property @{
             dir = [string]$Dir
             name = [string]$proj.name
@@ -386,7 +410,7 @@ else {
         })
         if ($entries.Count -gt 60) { $entries = @($entries | Select-Object -Last 60) }
         [IO.File]::WriteAllText($ideasPath,
-            (@{ entries = $entries; declined = $declinedAll } | ConvertTo-Json -Depth 8), $utf8NoBom)
+            (@{ entries = $entries; declined = $declinedAll; accepted = $acceptedAll } | ConvertTo-Json -Depth 8), $utf8NoBom)
     } catch {
         Add-Content $log ('[warn] ideas merge failed: ' + $_.Exception.Message)
     } finally {

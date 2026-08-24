@@ -27,6 +27,11 @@ contextBridge.exposeInMainWorld('dailybrief', {
   },
   aiRuns: () => ipcRenderer.invoke('ai:runs'),
   aiKill: (runId) => ipcRenderer.invoke('ai:kill', runId),
+  // Failed / incomplete / late AI runs: the journal, the live event, and the
+  // one text file to send on when something needs fixing.
+  aiProblems: () => ipcRenderer.invoke('ai:problems'),
+  onAiProblem: (cb) => ipcRenderer.on('ai:problem', (ev, p) => cb(p)),
+  aiOpenDiagnostics: () => ipcRenderer.invoke('ai:openDiagnostics'),
   aiOpenContext: () => ipcRenderer.invoke('ai:openContext'),
   scanFolder: (taskId, dir) => ipcRenderer.invoke('task:scan', taskId, dir),
   kanbanGenerate: () => ipcRenderer.invoke('kanban:generate'),
