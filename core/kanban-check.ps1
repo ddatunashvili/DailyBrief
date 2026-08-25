@@ -72,7 +72,20 @@ try {
 
 # ---------- Build the compressed digest (script-side, zero AI tokens) ----------
 $kanbanPath = Join-Path $base 'kanban.json'
-$kanban = Get-Content $kanbanPath -Raw -Encoding UTF8 | ConvertFrom-Json
+# An empty board is a normal state (fresh account, first run), not a crash.
+# This used to die inside Get-Content before the log existed, which the app
+# then reported as "claude CLI wrote no log".
+if (-not (Test-Path $kanbanPath)) {
+    $empty = [pscustomobject]@{ tasks = @(); archive = @() }
+    [IO.File]::WriteAllText($kanbanPath, ($empty | ConvertTo-Json -Depth 6), $utf8NoBom)
+}
+try {
+    $kanban = Get-Content $kanbanPath -Raw -Encoding UTF8 | ConvertFrom-Json
+} catch {
+    [IO.File]::WriteAllText($log, ('[fatal] kanban.json unreadable: ' + $_.Exception.Message), $utf8NoBom)
+    exit 4
+}
+if (-not $kanban) { $kanban = [pscustomobject]@{ tasks = @(); archive = @() } }
 
 # ---------- project registry (built by discover-projects.ps1, no AI) ----------
 $projects = @()

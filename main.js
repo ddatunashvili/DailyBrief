@@ -94,6 +94,10 @@ function ensureDataDirs() {
 // its own backup — and the check is by folder shape, not by user name, so it
 // is a no-op on a machine that never ran an older build.
 function migrateLegacyData() {
+  // The destination has to exist first: copying into a folder that was not
+  // created yet throws ENOENT, and the catch below would swallow it, leaving
+  // a brand-new data dir that looks migrated but holds nothing.
+  try { fs.mkdirSync(DATA, { recursive: true }); } catch (e) { return; }
   if (fs.existsSync(path.join(DATA, 'kanban.json'))) return;
   const home = app.getPath('home');
   const legacy = [
@@ -117,8 +121,30 @@ function migrateLegacyData() {
     }
   } catch (e) { /* a partial copy still beats starting empty */ }
 }
+// Files the PowerShell scripts read unconditionally. Without them a fresh
+// account's first run died inside Get-Content before it could write a log,
+// which surfaced in the app as "claude CLI never wrote a log" — the one thing
+// that was not wrong. Seeds are written only when the file is absent, so they
+// never overwrite migrated or working data.
+const SEED_FILES = [
+  ['kanban.json', JSON.stringify({ tasks: [], archive: [] }, null, 2)],
+  ['dirs.txt', ''],
+  ['GOALS.md', ''],
+  ['STATE.md', ''],
+  ['PROGRESS.md', '']
+];
+
+function seedDataFiles() {
+  for (const [name, contents] of SEED_FILES) {
+    const p = path.join(DATA, name);
+    if (fs.existsSync(p)) continue;
+    try { fs.writeFileSync(p, contents, 'utf8'); } catch (e) { /* first read reports it */ }
+  }
+}
+
 if (app.isPackaged) migrateLegacyData();
 ensureDataDirs();
+seedDataFiles();
 
 // Run files pile up in the data folder; the module decides which families
 // exist and how many of each to keep.

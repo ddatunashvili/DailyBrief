@@ -64,7 +64,11 @@ if (-not $Force) {
     New-Item -ItemType Directory -Force $snapDir | Out-Null
     $snap = Join-Path $snapDir "$today.txt"
     # Directory-level stats only - no file names, no file contents (privacy by design).
-    Get-Content (Join-Path $base 'dirs.txt') -Encoding UTF8 |
+    # No dirs.txt yet (fresh account) means no watched folders, not a failed
+    # run: the snapshot is simply empty and the day is planned without it.
+    $dirsFile = Join-Path $base 'dirs.txt'
+    if (-not (Test-Path $dirsFile)) { [IO.File]::WriteAllText($dirsFile, '', (New-Object Text.UTF8Encoding $false)) }
+    Get-Content $dirsFile -Encoding UTF8 |
         Where-Object { $_.Trim() -and (Test-Path $_.Trim()) } |
         ForEach-Object { Get-ChildItem $_.Trim() -Recurse -File -ErrorAction SilentlyContinue } |
         Group-Object DirectoryName |
