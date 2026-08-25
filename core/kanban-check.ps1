@@ -30,9 +30,74 @@ $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $idSet = @()
 if ($TaskIds) { $idSet = @($TaskIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+
+# Which tasks this run actually saw activity for. A routine check may close
+# only these: closing a task off a trend ("the folder keeps shrinking") is the
+# one thing the prompt forbids and the one thing a model does anyway, so the
+# script decides it instead of asking.
+$evidenceIds = @{}
+$doneNeedsEvidence = $false
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
 function Norm-Title([string]$s) { return ($s + '').Trim().ToLowerInvariant() }
+
+# Generated output is not evidence of anything: one npm build rewrites every
+# hashed bundle in assets\ and drowns the five source files that matter.
+$NOISE_RE = '(^|/)(node_modules|dist|build|out|vendor|coverage|__pycache__|\.next|\.venv|assets|storage|logs|bootstrap/cache|framework/(views|cache|sessions))/|\.min\.(js|css)$|\.(map|log|lock)$|(^|/)(package-lock\.json|composer\.lock|yarn\.lock)$'
+# Separators are normalized first: a character class of escaped
+# backslashes is one escaping layer away from silently matching nothing.
+function Is-Noise([string]$path) { return (([string]$path).Replace([char]92, '/') -match $NOISE_RE) }
+
+# The names a task itself puts on the table: the files its checklist points at
+# (InfoCommand.php), the classes it names (DeployHistory), the columns it adds
+# (deploy_logs). Everything a folder-wide diff can be tested against.
+function Task-Keywords($t) {
+    $parts = @([string]$t.title, [string]$t.desc)
+    if ($t.PSObject.Properties['subtasks'] -and $t.subtasks) {
+        $parts += @($t.subtasks | ForEach-Object { [string]$_.text })
+    }
+    $text = ($parts -join ' ')
+    $kw = New-Object System.Collections.Generic.List[string]
+    $pats = @(
+        '[A-Za-z][A-Za-z0-9_\-]{2,}\.(?:blade\.php|tsx|ts|jsx|js|php|vue|py|go|rb|cs|java|kt|scss|css|json|md|ps1|sql|yaml|yml)',
+        '\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b',
+        '\b[a-z][a-z0-9]*_[a-z0-9_]{2,}\b'
+    )
+    foreach ($p in $pats) {
+        foreach ($m in [regex]::Matches($text, $p)) {
+            $v = [string]$m.Value
+            if ($v.Length -ge 4 -and -not ($kw -contains $v)) { $kw.Add($v) }
+        }
+    }
+    return @($kw)
+}
+
+# The same names with the extension dropped: "Invoice.php" also reaches
+# InvoiceController.php. Too loose to close a task on, precise enough to be
+# worth showing - the model decides which of the two it is looking at.
+function Task-Stems([string[]]$kw) {
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($k in $kw) {
+        $stem = [regex]::Replace([string]$k, '\.[A-Za-z0-9.]+$', '')
+        if ($stem.Length -ge 5 -and -not ($out -contains $stem)) { $out.Add($stem) }
+    }
+    return @($out)
+}
+
+# Which of the folder's changes name one of those keywords. A shared repo hands
+# every one of its tasks the same 8 commits; only this tells them apart.
+function Match-Evidence([string[]]$kw, [string[]]$lines) {
+    $out = New-Object System.Collections.Generic.List[string]
+    if (-not $kw -or $kw.Count -eq 0) { return @() }
+    foreach ($line in $lines) {
+        $l = [string]$line
+        if (-not $l) { continue }
+        foreach ($k in $kw) {
+            if ($l.IndexOf($k, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $out.Add($l); break }
+        }
+    }
+    return @($out | Select-Object -First 8)
+}
 
 # Georgian UI strings live in a UTF-8 JSON file on purpose: this script stays
 # ASCII so PS 5.1 (which reads a BOM-less .ps1 as ANSI) can never mangle them.
@@ -333,6 +398,18 @@ if ($Generate) {
         }
     }
 
+    # How many live cards watch each folder. One card alone owns everything its
+    # folder does; four cards in one repo own nothing until a name matches.
+    $dirTaskCount = @{}
+    foreach ($at in @($kanban.tasks | Where-Object { -not $_.done })) {
+        if ($at.PSObject.Properties['dirs'] -and $at.dirs) {
+            foreach ($dd in @($at.dirs)) {
+                $k = ([string]$dd).ToLowerInvariant()
+                if ($dirTaskCount.ContainsKey($k)) { $dirTaskCount[$k] = $dirTaskCount[$k] + 1 } else { $dirTaskCount[$k] = 1 }
+            }
+        }
+    }
+
     $digestTasks = @(foreach ($t in $activeTasks) {
         $dirs = @()
         if ($t.PSObject.Properties['dirs'] -and $t.dirs) { $dirs = @($t.dirs) }
@@ -350,7 +427,10 @@ if ($Generate) {
                 $hit
             })
             $changeCount = $matched.Count
-            $changes = @($matched | Sort-Object ts -Descending | Select-Object -First 5 |
+            $ranked = @($matched | Sort-Object ts -Descending)
+            $real = @($ranked | Where-Object { -not (Is-Noise ([string]$_.file)) })
+            if ($real.Count -gt 0) { $ranked = $real }
+            $changes = @($ranked | Select-Object -First 5 |
                 ForEach-Object { @{ file = [string]$_.file; ts = [string]$_.ts } })
         }
         $comments = @()
@@ -363,6 +443,7 @@ if ($Generate) {
 
         # Baseline diff from the folder scanner (git-aware, most precise signal).
         $scanDiff = $null
+        $commitDetail = @()
         $scanPath = Join-Path $base ('scans\' + [string]$t.id + '.json')
         if ($dirs.Count -gt 0) {
             if (Test-Path $scanPath) {
@@ -372,6 +453,16 @@ if ($Generate) {
                     if ($scan.isGit -and (Test-Path $sdir)) {
                         $range = [string]$scan.head + '..HEAD'
                         $newCommits = @(git -C $sdir log --oneline $range 2>$null | Select-Object -First 10 | ForEach-Object { [string]$_ })
+                        # "feat(billing): a bilingual invoice" names no file, so a
+                        # commit can only be tied to a task through what it touched.
+                        $commitDetail = @()
+                        foreach ($cl in $newCommits) {
+                            $h = ([string]$cl).Split(' ')[0]
+                            if (-not $h) { continue }
+                            $cf = @(git -C $sdir show --pretty=format: --name-only $h 2>$null |
+                                Where-Object { $_ } | Select-Object -First 40 | ForEach-Object { [string]$_ })
+                            $commitDetail += ,@{ line = [string]$cl; files = $cf }
+                        }
                         $changedFiles = @(git -C $sdir diff --name-only $range 2>$null | Select-Object -First 15 | ForEach-Object { [string]$_ })
                         $dirtyNow = @(git -C $sdir status --porcelain 2>$null | Select-Object -First 15 | ForEach-Object { [string]$_ })
                         $scanDiff = @{
@@ -406,11 +497,6 @@ if ($Generate) {
                 } catch { $scanDiff = $null }
             }
             # Advance the baseline: next check diffs from this moment.
-            # $null = : this runs inside the $digestTasks foreach EXPRESSION ?
-            # anything it emits (stray output, error records) would be captured
-            # into the array and ConvertTo-Json would serialize whole .NET
-            # object graphs into the digest (observed: a 391 MB digest file).
-            $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$t.id) -Dir ([string]$dirs[0]) 2>$null
         }
 
         $subtasks = @()
@@ -426,11 +512,51 @@ if ($Generate) {
             if ($pp) { $projCard = Project-Card $pp -Full:$Replan }
         }
 
+        $hasFolderSignal = $changeCount -gt 0
+        if ($scanDiff) {
+            foreach ($k in @('newCommits', 'changedFiles', 'dirtyNow', 'newFiles', 'modifiedFiles')) {
+                if ($scanDiff.ContainsKey($k) -and @($scanDiff[$k]).Count -gt 0) { $hasFolderSignal = $true }
+            }
+        }
+
+        # Split the folder's activity into what belongs to THIS task and what
+        # merely happened next to it.
+        $kw = Task-Keywords $t
+        $pool = @()
+        if ($scanDiff) {
+            foreach ($k in @('changedFiles', 'dirtyNow', 'newFiles', 'modifiedFiles')) {
+                if ($scanDiff.ContainsKey($k)) { $pool += @($scanDiff[$k]) }
+            }
+        }
+        $pool += @($changes | ForEach-Object { [string]$_.file })
+        $clean = @($pool | Where-Object { -not (Is-Noise ([string]$_)) })
+        $myFiles = @(Match-Evidence $kw $clean)
+        $nearFiles = @(Match-Evidence (Task-Stems $kw) $clean | Where-Object { $myFiles -notcontains $_ })
+        $myCommits = New-Object System.Collections.Generic.List[string]
+        foreach ($cd in $commitDetail) {
+            $hitFiles = @(Match-Evidence $kw @($cd.files | Where-Object { -not (Is-Noise ([string]$_)) }))
+            $subjHit = @(Match-Evidence $kw @([string]$cd.line))
+            if ($hitFiles.Count -gt 0) { $myCommits.Add(([string]$cd.line) + ' -> ' + (($hitFiles | Select-Object -First 3) -join ', ')) }
+            elseif ($subjHit.Count -gt 0) { $myCommits.Add([string]$cd.line) }
+        }
+        $myCommits = @($myCommits | Select-Object -First 6)
+        $shared = $false
+        if ($dirs.Count -gt 0) {
+            $dk = ([string]$dirs[0]).ToLowerInvariant()
+            if ($dirTaskCount.ContainsKey($dk) -and $dirTaskCount[$dk] -gt 1) { $shared = $true }
+        }
+        if (($myFiles.Count -gt 0 -or $myCommits.Count -gt 0) -or (-not $shared -and $hasFolderSignal)) {
+            $evidenceIds[[string]$t.id] = $true
+        }
+
         @{
             id = [string]$t.id; title = [string]$t.title; status = [string]$t.status
             desc = $desc; dirs = $dirs; subtasks = $subtasks
             changeCount = $changeCount; changes = $changes; comments = $comments
             scanDiff = $scanDiff; project = $projCard
+            mine = @{ files = $myFiles; commits = $myCommits }
+            related = @($nearFiles | Select-Object -First 6)
+            sharesFolder = $shared
         }
     })
 
@@ -444,6 +570,7 @@ if ($Generate) {
     # it's global or scoped to one task's dead folder - a task-replan is an
     # explicit user request to rethink the plan, so it always runs.
     $signal = $events.Count -gt 0
+    $doneNeedsEvidence = $true
     foreach ($dt in $digestTasks) {
         if ($dt.changeCount -gt 0) { $signal = $true }
         if ($dt.scanDiff) {
@@ -491,8 +618,8 @@ $promptFile = if ($Generate) { 'prompt-task-generate.md' }
 $prompt = (Get-Content (Join-Path $app $promptFile) -Raw -Encoding UTF8).
     Replace('{{DATA}}', $base).
     Replace('{{NOW}}', $now).
-    Replace('{{DIGEST}}', ("check-digest-$runToken.json")).
-    Replace('{{PATCH}}', ("check-patch-$runToken.json"))
+    Replace('{{DIGEST}}', $digestPath).
+    Replace('{{PATCH}}', $patchPath)
 
 Set-Location $base
 $ErrorActionPreference = 'Continue'
@@ -515,6 +642,15 @@ $ErrorActionPreference = 'Stop'
 # A named mutex serializes the read-merge-write against kanban.json so no
 # run's update is silently clobbered by another's; the fresh re-read inside
 # the lock picks up whatever the last writer (if any) just saved.
+# Haiku sometimes answers with the patch in a fenced block instead of writing
+# the file, and the whole run then applies nothing.
+if (-not (Test-Path $patchPath)) {
+    if (Recover-JsonFromLog $log $patchPath @('updates', 'newTasks')) {
+        # [info], not [warn]: the patch did land, so this is not a partial run.
+        Add-Content $log '[info] no patch file - patch recovered from the reply'
+    }
+}
+
 if (Test-Path $patchPath) {
     $mutex = New-Object System.Threading.Mutex($false, 'DailyBriefKanbanWrite')
     $gotLock = $false
@@ -527,10 +663,12 @@ if (Test-Path $patchPath) {
         if (-not $gotLock) { throw 'kanban.json lock timeout' }
         $fresh = Get-Content $kanbanPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
+        $touched = New-Object System.Collections.Generic.List[string]
         foreach ($u in @($patch.updates)) {
             if (-not $u -or -not $u.id) { continue }
             $t = $fresh.tasks | Where-Object { $_.id -eq $u.id } | Select-Object -First 1
             if (-not $t) { continue }
+            $touched.Add([string]$u.id)
             if ($u.PSObject.Properties['note'] -and $u.note) {
                 $note = New-Object PSObject -Property @{ text = [string]$u.note; at = $now }
                 $notes = @()
@@ -566,7 +704,16 @@ if (Test-Path $patchPath) {
                 if ($t.PSObject.Properties['subtasks']) { $t.subtasks = $newSubs }
                 else { $t | Add-Member -NotePropertyName subtasks -NotePropertyValue $newSubs }
             }
-            if ($u.PSObject.Properties['done'] -and $u.done -eq $true) { $t.done = $true }
+            # A comment ("this one is finished") is the user's own word and
+            # closes the task outright. A routine check has to point at
+            # something that moved in the task's own folder.
+            if ($u.PSObject.Properties['done'] -and $u.done -eq $true) {
+                if ($doneNeedsEvidence -and -not $Command -and -not $evidenceIds.ContainsKey([string]$u.id)) {
+                    Add-Content $log ('[warn] refused done for ' + $u.id + ': no commit/file activity for this task in this run')
+                } else {
+                    $t.done = $true
+                }
+            }
             $t.updatedAt = $stamp
         }
 
@@ -609,6 +756,16 @@ if (Test-Path $patchPath) {
 
         [IO.File]::WriteAllText($kanbanPath, ($fresh | ConvertTo-Json -Depth 10), $utf8NoBom)
         Remove-Item $patchPath -Force
+
+        # Only now does the baseline move, and only for the tasks this run had
+        # something to say about. Re-baselining every task on every check let
+        # the first run eat the evidence and left every later one blind.
+        foreach ($tid in @($touched | Select-Object -Unique)) {
+            $tt = $fresh.tasks | Where-Object { $_.id -eq $tid } | Select-Object -First 1
+            if ($tt -and $tt.PSObject.Properties['dirs'] -and @($tt.dirs).Count -gt 0) {
+                $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$tid) -Dir ([string]@($tt.dirs)[0]) 2>$null
+            }
+        }
     } catch {
         Add-Content $log ('[warn] patch apply failed: ' + $_.Exception.Message)
     } finally {

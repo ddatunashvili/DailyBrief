@@ -1253,9 +1253,11 @@ const BRIEF = {
     var badges = [];
     if (t.createdBy === "ai") badges.push('<span class="kb-chip kb-chip-ai">AI</span>');
     if ((t.subtasks || []).length) {
-      var stDone = t.subtasks.filter(function (s) { return s.done; }).length;
-      badges.push('<span class="kb-chip' + (stDone === t.subtasks.length ? ' kb-chip-ok' : '') + '">' +
-        icon("check") + stDone + "/" + t.subtasks.length + '</span>');
+      // taskProgress, not a raw count: a closed task's checklist counts as
+      // finished, so a done card reads 6/6 like its progress bar and not 0/6.
+      var pr = taskProgress(t);
+      badges.push('<span class="kb-chip' + (pr.done === pr.total ? ' kb-chip-ok' : '') + '">' +
+        icon("check") + pr.done + "/" + pr.total + '</span>');
     }
     // The folder name is more use on a card than the folder count: it says
     // which project the task is for without opening it.
@@ -3030,15 +3032,28 @@ const BRIEF = {
     while (aiToasts.children.length > 4) aiToasts.firstChild.remove();
   }
 
+  // A packaged install and a dev run share one localStorage but keep separate
+  // journals, so a single "seen" marker made each of them replay the other's
+  // problems on every launch. Scope the marker to the data folder it describes.
+  var PROBLEM_SEEN_KEY = "dailybrief-problem-seen";
+  async function scopeProblemSeenKey() {
+    if (!api || !api.appInfo) return;
+    try {
+      var info = await api.appInfo();
+      if (info && info.dataDir) PROBLEM_SEEN_KEY = "dailybrief-problem-seen:" + info.dataDir;
+    } catch (e) {}
+  }
+
   // Problems raised while the app was closed (or before a run-triggered page
   // reload) still deserve to be seen once.
   async function replayMissedProblems() {
     if (!api || !api.aiProblems) return;
+    await scopeProblemSeenKey();
     var list = [];
     try { list = await api.aiProblems(); } catch (e) { return; }
     if (!Array.isArray(list) || !list.length) return;
     var seen = "";
-    try { seen = localStorage.getItem("dailybrief-problem-seen") || ""; } catch (e) {}
+    try { seen = localStorage.getItem(PROBLEM_SEEN_KEY) || ""; } catch (e) {}
     var fresh = [];
     for (var i = 0; i < list.length; i++) {
       if (list[i].at === seen) break;
@@ -3046,7 +3061,7 @@ const BRIEF = {
       if (Date.now() - new Date(list[i].at).getTime() > 86400000) break;
       fresh.push(list[i]);
     }
-    try { localStorage.setItem("dailybrief-problem-seen", list[0].at); } catch (e) {}
+    try { localStorage.setItem(PROBLEM_SEEN_KEY, list[0].at); } catch (e) {}
     fresh.slice(0, 3).reverse().forEach(showAiToast);
   }
 
@@ -3054,7 +3069,7 @@ const BRIEF = {
     try {
       api.onAiProblem(function (p) {
         if (!p) return;
-        try { localStorage.setItem("dailybrief-problem-seen", p.at); } catch (e) {}
+        try { localStorage.setItem(PROBLEM_SEEN_KEY, p.at); } catch (e) {}
         showAiToast(p);
         if (typeof views !== "undefined" && views.ai && !views.ai.hidden) renderAiProblems();
       });

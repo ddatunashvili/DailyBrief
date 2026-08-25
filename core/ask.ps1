@@ -297,8 +297,8 @@ if ($digestSize -gt 1MB) {
 $prompt = (Get-Content (Join-Path $app $promptFile) -Raw -Encoding UTF8).
     Replace('{{DATA}}', $base).
     Replace('{{NOW}}', $now).
-    Replace('{{DIGEST}}', ("ask-digest-$runToken.json")).
-    Replace('{{OUT}}', ("ask-out-$runToken.json"))
+    Replace('{{DIGEST}}', $digestPath).
+    Replace('{{OUT}}', $outPath)
 
 Set-Location $base
 $ErrorActionPreference = 'Continue'
@@ -317,6 +317,11 @@ $prompt | & $claude @claudeArgs 2>&1 | Out-File $log -Encoding utf8
 $ErrorActionPreference = 'Stop'
 
 # ---------- merge the answer (only the script writes the stores) ----------
+if (-not (Test-Path $outPath)) {
+    if (Recover-JsonFromLog $log $outPath @('answer', 'ideas', 'items', 'questions')) {
+        Add-Content $log '[info] no output file - answer recovered from the reply'
+    }
+}
 if (-not (Test-Path $outPath)) {
     Add-Content $log '[warn] model wrote no output file'
     Add-Content $log ('[timing] ask total {0:N0}s' -f $stopwatch.Elapsed.TotalSeconds)
