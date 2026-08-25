@@ -374,6 +374,33 @@
   .kb-chip .ic { width: 11px; height: 11px; }
   .kb-chip-ai { color: var(--accent); background: var(--accent-soft); font-weight: 700; }
   .kb-chip-note { color: var(--accent); background: var(--accent-soft); }
+  /* project label: the folder a card belongs to, by name */
+  .kb-chip-proj {
+    color: var(--text); background: var(--surface); border-color: var(--accent);
+    font-weight: 700; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .kb-chip-proj .ic { color: var(--accent); }
+  /* grouped board: a header per project inside every column */
+  .kb-group { display: flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.15rem 0.1rem; }
+  .kb-group:first-child { padding-top: 0.15rem; }
+  .kb-group-name {
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .kb-group-count {
+    font-size: 0.66rem; color: var(--muted); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 999px; padding: 0 0.35rem; flex: none;
+  }
+  .kb-group-copy {
+    margin-left: auto; flex: none; cursor: pointer; font: inherit; font-size: 0.7rem;
+    background: none; color: var(--muted); border: 1px solid var(--border); border-radius: 7px;
+    padding: 0.1rem 0.3rem; display: inline-flex; align-items: center;
+  }
+  .kb-group-copy .ic { width: 11px; height: 11px; }
+  .kb-group-copy:hover { color: var(--accent); border-color: var(--accent); }
+  .kb-group-copy.ok { color: var(--ok); border-color: var(--ok); }
+  .kb-btn.on { background: var(--accent); color: #fff; }
+  .kb-btn.ok { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
   .kb-addcard {
     background: none; border: none; text-align: left;
     color: var(--muted); font: inherit; font-size: 0.8rem;
@@ -751,6 +778,7 @@
         <div class="kb-actions">
           <button class="kb-btn" id="kb-check" title="AI შეამოწმებს რა შეიცვალა დირექტორიებში და თითო ტასკს მიუწერს ცვლილებებს">მიმდინარეს შემოწმება</button>
           <button class="kb-btn" id="kb-replan" title="AI სამომავლო გეგმას გადააწყობს შესრულებული/შექმნილი ტასკებისა და სტატუსების მიხედვით">სამომავლო გადაგეგმვა</button>
+          <button class="kb-btn ghost" id="kb-group" title="ბარათებს პროექტების (ფოლდერების) მიხედვით დააჯგუფებს ყოველ სვეტში">პროექტებად დაჯგუფება</button>
           <button class="kb-btn" id="kb-generate" title="AI პროექტების რეესტრიდან (commit-ები, დაუკომიტებელი ფაილები, TODO-ები) შემოგთავაზებს ახალ ტასკებს — ფოლდერით და ჩეკლისტით">ტასკების გენერაცია</button>
         </div>
       </div>
@@ -1110,6 +1138,34 @@ const BRIEF = {
     return box;
   }
 
+  /* A card belongs to the project whose folder it watches: the folder's own
+     name is the project name, the same name the projects page shows. */
+  function dirBase(d) {
+    var s = String(d || "").replace(/[\\/]+$/, "");
+    var i = Math.max(s.lastIndexOf("\\"), s.lastIndexOf("/"));
+    return i >= 0 ? s.slice(i + 1) : s;
+  }
+
+  var NO_PROJECT = "პროექტის გარეშე";
+
+  // Attribute-safe: md() leaves quotes and backticks alone, which is fine in
+  // text but not inside a title="…".
+  function attrEsc(s) {
+    return String(s).split("&").join("&amp;").split("<").join("&lt;")
+      .split(">").join("&gt;").split('"').join("&quot;");
+  }
+
+  function taskProject(t) {
+    var dirs = (t && t.dirs) || [];
+    return dirs.length ? (dirBase(dirs[0]) || NO_PROJECT) : NO_PROJECT;
+  }
+
+  // Every task of one project, in board order, whatever column it sits in.
+  function projectTasks(name) {
+    return (kb.tasks || []).filter(function (t) { return taskProject(t) === name; })
+      .sort(function (a, b) { return String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")); });
+  }
+
   /* One task as plain text, shaped to be pasted straight into an AI prompt:
      title, status, folders, description, checklist, progress. */
   function taskCopyText(t) {
@@ -1139,15 +1195,38 @@ const BRIEF = {
     return lines.join("\n");
   }
 
+  /* A whole project as one prompt: every task of that folder, in order,
+     separated so a model can tell them apart. */
+  function projectCopyText(name, tasks) {
+    var lines = ["# პროექტი: " + String(name)];
+    var dirs = [];
+    tasks.forEach(function (t) {
+      (t.dirs || []).forEach(function (d) { if (dirs.indexOf(d) < 0) dirs.push(d); });
+    });
+    if (dirs.length) lines.push("ფოლდერი: " + dirs.join(", "));
+    lines.push("ტასკები: " + tasks.length);
+    lines.push("");
+    tasks.forEach(function (t, i) {
+      if (i) lines.push("", "---", "");
+      lines.push(taskCopyText(t));
+    });
+    return lines.join("\n");
+  }
+
+  var PROJ_COPY_TITLE = "პროექტის ყველა ტასკის კოპირება (AI პრომპტისთვის)";
+
   function copyTaskToClipboard(t, btn) {
-    var text = taskCopyText(t);
+    copyTextToClipboard(taskCopyText(t), btn, "ტასკის კოპირება (AI პრომპტისთვის)");
+  }
+
+  function copyTextToClipboard(text, btn, restoreTitle) {
     function done(ok) {
       if (!btn) return;
       btn.classList.toggle("ok", ok);
       btn.title = ok ? "დაკოპირდა" : "კოპირება ვერ მოხერხდა";
       setTimeout(function () {
         btn.classList.remove("ok");
-        btn.title = "ტასკის კოპირება (AI პრომპტისთვის)";
+        btn.title = restoreTitle;
       }, 1400);
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1175,7 +1254,13 @@ const BRIEF = {
       badges.push('<span class="kb-chip' + (stDone === t.subtasks.length ? ' kb-chip-ok' : '') + '">' +
         icon("check") + stDone + "/" + t.subtasks.length + '</span>');
     }
-    if ((t.dirs || []).length) badges.push('<span class="kb-chip kb-chip-note">' + icon("folder") + t.dirs.length + '</span>');
+    // The folder name is more use on a card than the folder count: it says
+    // which project the task is for without opening it.
+    if ((t.dirs || []).length) {
+      var extra = t.dirs.length > 1 ? " +" + (t.dirs.length - 1) : "";
+      badges.push('<span class="kb-chip kb-chip-proj" title="' + attrEsc(t.dirs.join(", ")) + '">' +
+        icon("folder") + md(taskProject(t)) + extra + '</span>');
+    }
     if ((t.aiNotes || []).length) badges.push('<span class="kb-chip kb-chip-note">' + icon("activity") + t.aiNotes.length + '</span>');
     if ((t.comments || []).length) badges.push('<span class="kb-chip">' + icon("comment") + t.comments.length + '</span>');
     var card = el("div", "kb-card" + (t.done ? " is-done" : ""),
@@ -1205,6 +1290,46 @@ const BRIEF = {
     return card;
   }
 
+  /* Grouped board: the cards of one project sit together inside every column,
+     under a header that copies that project's whole task list in one go. */
+  var kbGroupByProject = false;
+  try { kbGroupByProject = localStorage.getItem("dailybrief-kb-group") === "1"; } catch (e) {}
+
+  function groupByProject(items) {
+    var order = [], byName = {};
+    items.forEach(function (t) {
+      var n = taskProject(t);
+      if (!byName[n]) { byName[n] = []; order.push(n); }
+      byName[n].push(t);
+    });
+    // Biggest project first, the folderless cards last.
+    order.sort(function (a, b) {
+      if ((a === NO_PROJECT) !== (b === NO_PROJECT)) return a === NO_PROJECT ? 1 : -1;
+      return (byName[b].length - byName[a].length) || a.localeCompare(b);
+    });
+    return order.map(function (n) { return { name: n, items: byName[n] }; });
+  }
+
+  function groupHead(g) {
+    var head = el("div", "kb-group",
+      '<span class="kb-group-name">' + md(g.name) + '</span>' +
+      '<span class="kb-group-count">' + g.items.length + '</span>');
+    if (g.name !== NO_PROJECT) {
+      // Copies every task of the project, not only this column's — the point
+      // is to hand a model the whole project at once.
+      var total = projectTasks(g.name).length;
+      var title = PROJ_COPY_TITLE + " · " + total;
+      var copy = el("button", "kb-group-copy", icon("copy"));
+      copy.title = title;
+      copy.addEventListener("click", function (e) {
+        e.stopPropagation();
+        copyTextToClipboard(projectCopyText(g.name, projectTasks(g.name)), copy, title);
+      });
+      head.appendChild(copy);
+    }
+    return head;
+  }
+
   function renderKanban() {
     boardEl.innerHTML = "";
     KB_COLS.forEach(function (col) {
@@ -1219,7 +1344,14 @@ const BRIEF = {
         '<span class="kb-count">' + items.length + '</span>'));
 
       var cards = el("div", "kb-cards");
-      items.forEach(function (t) { cards.appendChild(buildCard(t)); });
+      if (kbGroupByProject) {
+        groupByProject(items).forEach(function (g) {
+          cards.appendChild(groupHead(g));
+          g.items.forEach(function (t) { cards.appendChild(buildCard(t)); });
+        });
+      } else {
+        items.forEach(function (t) { cards.appendChild(buildCard(t)); });
+      }
       colEl.appendChild(cards);
 
       if (col.key !== "done") {
@@ -1678,6 +1810,19 @@ const BRIEF = {
   var kbCheckBtn = document.getElementById("kb-check");
   var kbReplanBtn = document.getElementById("kb-replan");
   var kbGenerateBtn = document.getElementById("kb-generate");
+
+  var kbGroupBtn = document.getElementById("kb-group");
+  function paintGroupBtn() {
+    kbGroupBtn.classList.toggle("on", kbGroupByProject);
+    kbGroupBtn.classList.toggle("ghost", !kbGroupByProject);
+  }
+  paintGroupBtn();
+  kbGroupBtn.addEventListener("click", function () {
+    kbGroupByProject = !kbGroupByProject;
+    try { localStorage.setItem("dailybrief-kb-group", kbGroupByProject ? "1" : "0"); } catch (e) {}
+    paintGroupBtn();
+    renderKanban();
+  });
 
   if (api) {
     kbCheckBtn.addEventListener("click", async function () {
@@ -2171,6 +2316,22 @@ const BRIEF = {
     var openBtn = el("button", "kb-btn ghost", "ფოლდერის გახსნა");
     openBtn.addEventListener("click", function () { if (api && api.projectsOpen) api.projectsOpen(p.dir); });
     acts.appendChild(openBtn);
+    // Same folder, every task on the board — the projects-page twin of the
+    // group header's copy button.
+    var pjTasks = (kb.tasks || []).filter(function (t) {
+      return (t.dirs || []).some(function (d) {
+        return String(d).toLowerCase() === String(p.dir || "").toLowerCase();
+      });
+    });
+    if (pjTasks.length) {
+      var pjCopy = el("button", "kb-btn ghost", icon("copy") + "ტასკების კოპირება (" + pjTasks.length + ")");
+      pjCopy.title = PROJ_COPY_TITLE;
+      pjCopy.addEventListener("click", function () {
+        copyTextToClipboard(projectCopyText(p.name || dirBase(p.dir), pjTasks), pjCopy, PROJ_COPY_TITLE);
+      });
+      acts.appendChild(pjCopy);
+    }
+
     var taskBtn = el("button", "kb-btn", "ტასკის შექმნა");
     taskBtn.addEventListener("click", function () {
       var t = {
