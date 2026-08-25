@@ -366,6 +366,14 @@ ipcMain.handle('kanban:check', () => runCheck('', false, false));
 
 ipcMain.handle('kanban:taskCheck', (ev, taskId) => (taskId ? runCheck(String(taskId).slice(0, 60), false, false) : false));
 
+// One project's cards in one board column: the same check, scoped to the ids
+// the board actually shows there instead of every active task.
+ipcMain.handle('kanban:checkTasks', (ev, ids) => {
+  const list = (Array.isArray(ids) ? ids : [])
+    .map((x) => String(x || '').slice(0, 60)).filter(Boolean).slice(0, 40);
+  return list.length ? runCheck('', false, false, false, list) : false;
+});
+
 ipcMain.handle('kanban:taskReplan', (ev, taskId) => (taskId ? runCheck(String(taskId).slice(0, 60), true, false) : false));
 
 // Trajectory-based task generation: reads GOALS/STATE/PROGRESS instead of
@@ -1091,7 +1099,7 @@ ipcMain.handle('ai:status', () => Array.from(activeRuns.values()).map((r) => ({
 // taskId/replan/generate: which check-family flavor to run. Concurrent with
 // each other (capped at MAX_CONCURRENT_AI), always exclusive with the daily
 // pipeline (full/replan) since that rewrites kanban.json wholesale.
-function runCheck(taskId, replan, generate, command) {
+function runCheck(taskId, replan, generate, command, taskIds) {
   if (pipelineRunning || activeRuns.size >= MAX_CONCURRENT_AI) return false;
   const mode = command ? 'task-command'
     : (generate ? 'task-generate' : (replan ? 'task-replan' : 'check'));
@@ -1101,6 +1109,7 @@ function runCheck(taskId, replan, generate, command) {
     '-File', CHECK_SCRIPT, '-RunId', id
   ];
   if (taskId) args.push('-TaskId', taskId);
+  if (!taskId && taskIds && taskIds.length) args.push('-TaskIds', taskIds.join(','));
   if (replan) args.push('-Replan');
   if (generate) args.push('-Generate');
   if (command) args.push('-Command');

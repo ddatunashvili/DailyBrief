@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('dailybrief', {
   kanbanLoad: () => ipcRenderer.invoke('kanban:load'),
   kanbanSave: (data) => ipcRenderer.invoke('kanban:save', data),
   kanbanCheck: () => ipcRenderer.invoke('kanban:check'),
+  kanbanCheckTasks: (ids) => ipcRenderer.invoke('kanban:checkTasks', ids),
   aiStatus: () => ipcRenderer.invoke('ai:status'),
   onAiStatus: (cb) => ipcRenderer.on('ai:status', (ev, state) => cb(state)),
   analyticsData: () => ipcRenderer.invoke('analytics:data'),

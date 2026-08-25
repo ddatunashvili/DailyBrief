@@ -390,15 +390,17 @@
   .kb-group-count {
     font-size: 0.66rem; color: var(--muted); background: var(--surface);
     border: 1px solid var(--border); border-radius: 999px; padding: 0 0.35rem; flex: none;
+    margin-right: auto;
   }
-  .kb-group-copy {
-    margin-left: auto; flex: none; cursor: pointer; font: inherit; font-size: 0.7rem;
+  .kb-group-copy, .kb-group-check {
+    flex: none; cursor: pointer; font: inherit; font-size: 0.7rem;
     background: none; color: var(--muted); border: 1px solid var(--border); border-radius: 7px;
     padding: 0.1rem 0.3rem; display: inline-flex; align-items: center;
   }
-  .kb-group-copy .ic { width: 11px; height: 11px; }
-  .kb-group-copy:hover { color: var(--accent); border-color: var(--accent); }
-  .kb-group-copy.ok { color: var(--ok); border-color: var(--ok); }
+  .kb-group-copy .ic, .kb-group-check .ic { width: 11px; height: 11px; }
+  .kb-group-copy:hover, .kb-group-check:not(:disabled):hover { color: var(--accent); border-color: var(--accent); }
+  .kb-group-copy.ok, .kb-group-check.ok { color: var(--ok); border-color: var(--ok); }
+  .kb-group-check:disabled { opacity: 0.5; cursor: default; }
   .kb-btn.on { background: var(--accent); color: #fff; }
   .kb-btn.ok { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
   .kb-addcard {
@@ -1311,11 +1313,33 @@ const BRIEF = {
     return order.map(function (n) { return { name: n, items: byName[n] }; });
   }
 
-  function groupHead(g) {
+  function groupHead(g, col) {
     var head = el("div", "kb-group",
       '<span class="kb-group-name">' + md(g.name) + '</span>' +
       '<span class="kb-group-count">' + g.items.length + '</span>');
     if (g.name !== NO_PROJECT) {
+      // Unlike the copy button, the check is scoped to what this column shows:
+      // "look at what changed for these cards", not for the whole project.
+      // Done cards have nothing left to check, so that column gets no button.
+      if (api && api.kanbanCheckTasks && col && col.key !== "done") {
+        var ids = g.items.map(function (t) { return t.id; });
+        var checkTitle = "ამ სვეტში ამ პროექტის ტასკების შემოწმება · " + ids.length;
+        var check = el("button", "kb-group-check", icon("activity"));
+        check.title = checkTitle;
+        check.addEventListener("click", async function (e) {
+          e.stopPropagation();
+          check.disabled = true;
+          var started = await api.kanbanCheckTasks(ids);
+          check.classList.toggle("ok", started);
+          check.title = started ? "მოწმდება… (1-2 წთ)" : "ბევრი პროცესია გაშვებული…";
+          setTimeout(function () {
+            check.disabled = false;
+            check.classList.remove("ok");
+            check.title = checkTitle;
+          }, 2500);
+        });
+        head.appendChild(check);
+      }
       // Copies every task of the project, not only this column's — the point
       // is to hand a model the whole project at once.
       var total = projectTasks(g.name).length;
@@ -1360,7 +1384,7 @@ const BRIEF = {
       var cards = el("div", "kb-cards");
       if (kbGroupByProject) {
         groupByProject(items).forEach(function (g) {
-          cards.appendChild(groupHead(g));
+          cards.appendChild(groupHead(g, col));
           g.items.forEach(function (t) { cards.appendChild(buildCard(t)); });
         });
       } else {

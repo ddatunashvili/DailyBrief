@@ -1,7 +1,9 @@
 # Fast kanban check with minimal AI tokens. The script does the heavy lifting:
 # it compresses task + linked-folder activity into check-digest-<runid>.json,
 # Claude reads ONLY that and writes a tiny check-patch-<runid>.json, and the
-# script applies the patch to kanban.json. -TaskId scopes to one task;
+# script applies the patch to kanban.json. -TaskId scopes to one task,
+# -TaskIds (comma-separated) to a hand-picked set - one board column's cards
+# for one project;
 # -Replan re-plans it; -Generate proposes brand-new tasks from overall
 # trajectory instead of per-task activity. -RunId lets several of these run
 # at once (main.js assigns one per concurrent AI process) without their
@@ -9,6 +11,7 @@
 # ASCII-only on purpose (PS 5.1 encoding).
 param(
     [string]$TaskId = '',
+    [string]$TaskIds = '',
     [switch]$Replan,
     [switch]$Generate,
     [switch]$Command,
@@ -25,6 +28,8 @@ $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 . (Join-Path $PSScriptRoot 'paths.ps1')   # sets $app (install) and $base (this user's data)
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
+$idSet = @()
+if ($TaskIds) { $idSet = @($TaskIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
 function Norm-Title([string]$s) { return ($s + '').Trim().ToLowerInvariant() }
@@ -317,7 +322,16 @@ if ($Generate) {
     }
 
     $activeTasks = @($kanban.tasks | Where-Object { -not $_.done })
-    if ($TaskId) { $activeTasks = @($activeTasks | Where-Object { $_.id -eq $TaskId }) }
+    if ($TaskId) {
+        $activeTasks = @($activeTasks | Where-Object { $_.id -eq $TaskId })
+    } elseif ($idSet.Count -gt 0) {
+        # A picked set: the same per-task digest as a full check, only over these.
+        $activeTasks = @($activeTasks | Where-Object { $idSet -contains [string]$_.id })
+        if ($activeTasks.Count -eq 0) {
+            [IO.File]::WriteAllText($log, 'skipped: none of the picked tasks are active - zero AI tokens spent', $utf8NoBom)
+            exit 0
+        }
+    }
 
     $digestTasks = @(foreach ($t in $activeTasks) {
         $dirs = @()
@@ -448,7 +462,9 @@ if ($Generate) {
 
     $digest = @{
         now = $now
-        target = if ($TaskId) { $TaskId } else { 'ALL' }
+        # Only a whole-board check may propose new tasks: a scoped run has not
+        # seen the rest of the board and would duplicate what is already there.
+        target = if ($TaskId) { $TaskId } elseif ($idSet.Count -gt 0) { 'SCOPED' } else { 'ALL' }
         topDirs = $topDirs
         tasks = $digestTasks
         doneTitles = $doneTitlesAll
