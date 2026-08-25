@@ -551,6 +551,21 @@
   .kb-archive-item .at { font-size: 0.68rem; margin-left: 0.4rem; }
 
   /* projects page */
+  /* Search first, refresh second: with 40 folders the list is a haystack, so
+     the page opens on the five that actually moved and the box finds the rest. */
+  .pj-toolbar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+  .pj-search {
+    flex: 1; min-width: 0; background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.6rem;
+    font: inherit; font-size: 0.85rem;
+  }
+  .pj-search:focus { outline: none; border-color: var(--accent); }
+  .pj-search::placeholder { color: var(--muted); }
+  .pj-hint { color: var(--muted); font-size: 0.78rem; margin-bottom: 0.6rem; }
+  .pj-hint button {
+    background: none; border: none; color: var(--accent); font: inherit;
+    font-size: 0.78rem; cursor: pointer; padding: 0; text-decoration: underline;
+  }
   .pj-card { border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
              padding: 0.75rem 0.9rem; margin-bottom: 0.7rem; }
   .pj-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
@@ -666,9 +681,12 @@
         <h1>პროექტები</h1>
         <p class="an-sub" id="projects-sub">რას მუშაობ სინამდვილეში — commit-ები, დაუკომიტებელი ფაილები, კოდში დარჩენილი TODO-ები</p>
       </header>
-      <div style="margin-bottom:0.9rem;">
+      <div class="pj-toolbar">
+        <input type="search" id="projects-search" class="pj-search" autocomplete="off" spellcheck="false"
+               placeholder="ძებნა — სახელი, ფოლდერი, სტეკი, აღწერა…">
         <button class="kb-btn ghost" id="projects-refresh" title="ხელახლა დაასკანერებს სამუშაო ფოლდერებს (AI-ის გარეშე)">განახლება</button>
       </div>
+      <div class="pj-hint" id="projects-hint"></div>
       <div id="projects-list"></div>
     </div>
     <div class="analytics-wrap" id="ask-view" hidden>
@@ -2208,6 +2226,81 @@ const BRIEF = {
     return card;
   }
 
+  /* ---- projects: search over the registry, top 5 when the box is empty ---- */
+
+  var PROJECTS_TOP = 5;
+  var projectsQuery = "";
+  var projectsShowAll = false;   // set by the "show all" link, cleared on every new search
+
+  // Everything a person might type: the folder name, the path, the stack, the
+  // one-line description, the branch. Cheap enough to rebuild per keystroke.
+  function projectHaystack(p) {
+    return [p.name, p.dir, p.branch, p.pkgDesc, p.readme]
+      .concat(arr(p.stack))
+      .map(function (v) { return String(v || ""); })
+      .join(" ")
+      .toLowerCase();
+  }
+
+  // "Active" is what the registry already measures: files changed in the last
+  // 14 days, then how recently the folder was touched as a tie-breaker.
+  function projectActivity(p) {
+    return Number(p.changed14d) || 0;
+  }
+
+  function projectTouchedAt(p) {
+    var t = Date.parse(p.lastTouched || p.lastCommitAt || "");
+    return isFinite(t) ? t : 0;
+  }
+
+  function sortByActivity(ps) {
+    return ps.slice().sort(function (a, b) {
+      return (projectActivity(b) - projectActivity(a)) || (projectTouchedAt(b) - projectTouchedAt(a));
+    });
+  }
+
+  // Every word must match, in any field and any order, so "renode laravel"
+  // narrows instead of finding nothing.
+  function filterProjects(ps, query) {
+    var words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return ps;
+    return ps.filter(function (p) {
+      var hay = projectHaystack(p);
+      return words.every(function (w) { return hay.indexOf(w) !== -1; });
+    });
+  }
+
+  function paintProjects() {
+    var list = document.getElementById("projects-list");
+    var hint = document.getElementById("projects-hint");
+    var all = sortByActivity(arr(projectsCache.projects));
+    var matched = filterProjects(all, projectsQuery);
+    var shown = (projectsQuery || projectsShowAll) ? matched : matched.slice(0, PROJECTS_TOP);
+
+    list.innerHTML = "";
+    hint.innerHTML = "";
+    if (!all.length) return;
+
+    if (!matched.length) {
+      hint.textContent = "ვერაფერი მოიძებნა — სცადე სახელის ან ფოლდერის ნაწილი.";
+      return;
+    }
+    if (projectsQuery) {
+      hint.textContent = matched.length + " ნაპოვნი " + all.length + "-დან";
+    } else if (projectsShowAll) {
+      hint.textContent = "ყველა " + all.length + " პროექტი · ";
+      var less = el("button", null, "მხოლოდ ტოპ " + PROJECTS_TOP);
+      less.addEventListener("click", function () { projectsShowAll = false; paintProjects(); });
+      hint.appendChild(less);
+    } else if (all.length > PROJECTS_TOP) {
+      hint.textContent = "ყველაზე აქტიური " + shown.length + " პროექტი · ";
+      var more = el("button", null, "ყველა (" + all.length + ")");
+      more.addEventListener("click", function () { projectsShowAll = true; paintProjects(); });
+      hint.appendChild(more);
+    }
+    shown.forEach(function (p) { list.appendChild(projectCard(p)); });
+  }
+
   async function renderProjectsPage() {
     var list = document.getElementById("projects-list");
     if (!api || !api.projectsLoad) {
@@ -2221,8 +2314,23 @@ const BRIEF = {
     document.getElementById("projects-sub").textContent = ps.length
       ? ps.length + " პროექტი · განახლდა " + (projectsCache.generatedAt || "—")
       : "რეესტრი ჯერ არ აგებულა — დააჭირე „განახლებას“.";
-    list.innerHTML = "";
-    ps.forEach(function (p) { list.appendChild(projectCard(p)); });
+    paintProjects();
+  }
+
+  var projectsSearchBox = document.getElementById("projects-search");
+  if (projectsSearchBox) {
+    // Filtering is local to the cache, so it repaints as you type — no reload.
+    projectsSearchBox.addEventListener("input", function () {
+      projectsQuery = String(projectsSearchBox.value || "").trim();
+      projectsShowAll = false;
+      paintProjects();
+    });
+    projectsSearchBox.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !projectsSearchBox.value) return;
+      projectsSearchBox.value = "";
+      projectsQuery = "";
+      paintProjects();
+    });
   }
 
   var projectsRefreshBtn = document.getElementById("projects-refresh");
