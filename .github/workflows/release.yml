@@ -1,0 +1,41 @@
+name: release
+
+# Publishing from a laptop meant pushing a 72 MB installer up a home uplink:
+# ~14 minutes when it worked, ECONNRESET when it did not, and a tag left with
+# no assets so every installed copy got a 404 for latest.yml. The runner is
+# already inside GitHub's network, so the upload is a local one.
+#
+# Release flow: bump the version, commit, then
+#   git tag v1.7.2 && git push origin v1.7.2
+on:
+  push:
+    tags:
+      - 'v*'
+  # Same job, started by hand, for a tag that already exists.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (e.g. v1.7.2)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # A release that fails its own tests is not worth uploading.
+      - run: npm test
+      - name: Build and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --publish always
