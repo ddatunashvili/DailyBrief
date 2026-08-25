@@ -15,7 +15,7 @@ $OutputEncoding = [Text.Encoding]::UTF8
 
 $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
+. (Join-Path $PSScriptRoot 'paths.ps1')   # sets $app (install) and $base (this user's data)
 $today  = Get-Date -Format 'yyyy-MM-dd'
 $brief  = Join-Path $base "briefings\$today.md"
 $log    = Join-Path $base 'last-run.log'
@@ -31,7 +31,7 @@ try {
 function Show-Brief([string]$Path) {
     Start-Process powershell.exe -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-STA',
-        '-File', (Join-Path $base 'show-brief.ps1'), '-Path', "`"$Path`""
+        '-File', (Join-Path $app 'show-brief.ps1'), '-Path', "`"$Path`""
     )
 }
 
@@ -49,12 +49,14 @@ if (Test-Path $brief) {
     }
 }
 
-# Replan uses a slim prompt: no snapshots, no history, fewer files, fewer turns.
-$promptFile = if ($Force) { 'prompt-replan.md' } else { 'prompt.md' }
-$prompt = (Get-Content (Join-Path $base $promptFile) -Raw -Encoding UTF8).Replace('{{TODAY}}', $today)
+# One digest in, one json out. The model used to open the registry, the board,
+# the snapshots and yesterday's brief one Read at a time and then write five
+# files - eleven round trips for work the scripts can do in half a second.
+$digestPath = Join-Path $base ("brief-digest-$today.json")
+$outPath    = Join-Path $base ("brief-out-$today.json")
+if (Test-Path $outPath) { Remove-Item $outPath -Force }
 
-# Snapshots and activity discovery recurse whole work roots - slow. A replan
-# doesn't need fresh activity data, so only the full morning run does this.
+# A replan doesn't need fresh activity data - the snapshots are a morning job.
 if (-not $Force) {
     # Snapshot watched folders (dirs.txt) so Claude can diff against previous days
     # and measure real progress without any manual logging.
@@ -73,10 +75,11 @@ if (-not $Force) {
         } |
         Sort-Object -Descending |
         Out-File $snap -Encoding utf8
-    # Discover the top 20 most actively used directories (Recent items + fresh edits)
-    # and keep a dated copy so Claude can track where time actually goes day to day.
+    # Top active directories. Scored from the project registry (which the app
+    # refreshes every 30 minutes), not from a fresh recursive scan of every
+    # work root - that scan alone took four minutes of the morning run.
     $topFile = Join-Path $base 'top-dirs.txt'
-    & (Join-Path $base 'discover-dirs.ps1') -OutFile $topFile -Top 10
+    & (Join-Path $app 'discover-dirs.ps1') -OutFile $topFile -Top 10
     if (Test-Path $topFile) {
         Copy-Item $topFile (Join-Path $snapDir "activity-$today.txt") -Force
     }
@@ -87,76 +90,79 @@ if (-not $Force) {
         ForEach-Object { $_.Group | Sort-Object Name -Descending | Select-Object -Skip 14 | Remove-Item -Force }
 }
 
+$digestArgs = @{ Out = $digestPath; Today = $today }
+if ($Force) { $digestArgs['Replan'] = $true }
+& (Join-Path $app 'brief-digest.ps1') @digestArgs | Out-File $log -Encoding utf8
+
+$promptFile = if ($Force) { 'prompt-replan.md' } else { 'prompt.md' }
+# The exact per-run file names go INTO the prompt: left to guess, the model
+# spends turns listing the folder and can write where nothing looks for it.
+$prompt = (Get-Content (Join-Path $app $promptFile) -Raw -Encoding UTF8).
+    Replace('{{DATA}}', $base).
+    Replace('{{TODAY}}', $today).
+    Replace('{{DIGEST}}', ("brief-digest-$today.json")).
+    Replace('{{OUT}}', ("brief-out-$today.json"))
+
 Set-Location $base
 # Continue, not Stop: PS 5.1 turns native stderr lines into ErrorRecords that would abort the run.
 # Args as an array, not backtick continuations - a stray space after a backtick silently drops flags.
 $ErrorActionPreference = 'Continue'
-# No --add-dir: Claude only sees the DailyBrief folder (directory stats),
-# never the user's actual files.
-$maxTurns = if ($Force) { '12' } else { '22' }
-# --add-dir: brief-app.html lives one level above core (the cwd).
-# --dangerously-skip-permissions: headless run, no one to answer prompts;
-# the prompt files strictly limit what may be written.
+# One read and one write is the whole job now, so the turn budget that used to
+# absorb eleven tool calls is a ceiling, not a plan.
+$maxTurns = if ($Force) { '5' } else { '8' }
+# No --add-dir: the model only ever touches the two files above, both in cwd.
+# --dangerously-skip-permissions: headless run, no one to answer prompts.
 # Prompt goes via stdin: it contains quotes that PS 5.1 mangles as an argument,
 # which silently breaks every flag after it.
 # sonnet for the daily brief and replans: language quality matters here.
-# The mechanical flows (checks, publish) stay on haiku - cheapest/fastest.
+# --effort low: the judgment is in the digest and the rules, not in the
+# deliberation. At the default effort the run spent six thousand tokens
+# thinking - most of the morning's wall clock - to reach the same plan.
 $claudeArgs = @(
     '-p',
     '--model', 'sonnet',
-    '--allowedTools', 'Read,Write,Edit,Glob,Grep',
-    '--add-dir', 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp',
+    '--effort', 'low',
+    '--allowedTools', 'Read,Write',
     '--allow-dangerously-skip-permissions',
     '--dangerously-skip-permissions',
     '--max-turns', $maxTurns,
     '--output-format', 'json'
 )
-$prompt | & $claude @claudeArgs 2>&1 | Out-File $log -Encoding utf8
+$prompt | & $claude @claudeArgs 2>&1 | Out-File $log -Encoding utf8 -Append
 $ErrorActionPreference = 'Stop'
+
+# Every file the run produces is written here, from that one json.
+& (Join-Path $app 'brief-apply.ps1') -In $outPath -Today $today 2>&1 |
+    ForEach-Object { Add-Content $log ([string]$_) }
 
 Add-Content $log ('[timing] total {0:N0}s' -f $stopwatch.Elapsed.TotalSeconds)
 
-# Inject today's brief JSON (written by Claude, small file) into the app
-# page's BRIEF block. Claude never reads the big HTML - the script splices,
-# which is the main token saver of the daily run.
-$injected = $false
+# Today's brief lives in briefs\<date>.json and the app reads it from there
+# over IPC. The page itself is installed program content - shared by every
+# user on the machine, read-only inside the packaged asar - so the run must
+# never write into it. Validate the JSON here instead: a broken file is worth
+# a log line now rather than an empty page at 8am.
+$briefReady = $false
+$briefJsonPath = Join-Path $base ('briefs\' + $today + '.json')
 try {
-    $appPage = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\brief-app.html'
-    $briefJsonPath = Join-Path $base ('briefs\' + $today + '.json')
     if (Test-Path $briefJsonPath) {
-        $json = (Get-Content $briefJsonPath -Raw -Encoding UTF8).Trim()
-        $null = $json | ConvertFrom-Json   # validate before touching the page
-        $html = Get-Content $appPage -Raw -Encoding UTF8
-        $pattern = '/\*BRIEF-DATA-START\*/[\s\S]*?/\*BRIEF-DATA-END\*/'
-        $replacement = "/*BRIEF-DATA-START*/`nconst BRIEF = " + $json + ";`n/*BRIEF-DATA-END*/"
-        # Scriptblock evaluator: replacement text must be literal ($ in JSON is not a group ref).
-        $newHtml = [regex]::Replace($html, $pattern, { param($m) $replacement })
-        [IO.File]::WriteAllText($appPage, $newHtml, (New-Object Text.UTF8Encoding $false))
-        $injected = $true
+        $null = (Get-Content $briefJsonPath -Raw -Encoding UTF8).Trim() | ConvertFrom-Json
+        $briefReady = $true
     } else {
-        Add-Content $log '[warn] briefs json for today not found; app page not updated'
+        Add-Content $log '[warn] briefs json for today not found; app has nothing new to show'
     }
 } catch {
-    Add-Content $log ('[warn] BRIEF injection failed: ' + $_.Exception.Message)
+    Add-Content $log ('[warn] briefs json for today is not valid JSON: ' + $_.Exception.Message)
 }
 
-# Tiny follow-up run: publish the updated page to the fixed artifact URL.
-# Only the Artifact tool, 3 turns max - costs almost nothing.
-if ($injected) {
-    $pubPrompt = Get-Content (Join-Path $base 'prompt-publish.md') -Raw -Encoding UTF8
-    $ErrorActionPreference = 'Continue'
-    $pubArgs = @(
-        '-p',
-        '--model', 'haiku',
-        '--allowedTools', 'Artifact',
-        '--add-dir', 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp',
-        '--allow-dangerously-skip-permissions',
-        '--dangerously-skip-permissions',
-        '--max-turns', '3',
-        '--output-format', 'json'
+# Optional follow-up run: publish a web copy of today's brief. Off unless this
+# user dropped a publish.json in their data folder (it holds their own artifact
+# URL), because publishing is personal - one account, one link.
+if ($briefReady -and (Test-Path (Join-Path $base 'publish.json'))) {
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+        '-File', (Join-Path $app 'publish-page.ps1'), '-Today', $today
     )
-    $pubPrompt | & $claude @pubArgs 2>&1 | Out-File $log -Encoding utf8 -Append
-    $ErrorActionPreference = 'Stop'
 }
 
 if (Test-Path $brief) {

@@ -1,0 +1,37 @@
+name: ci
+
+# Two things this catches that a local run does not: a test that only passed
+# because of a stale node_modules, and a packaged build that breaks because a
+# file was left out of the electron-builder file list.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $bad = 0
+          Get-ChildItem core\*.ps1 | ForEach-Object {
+            $errors = $null
+            $tokens = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors -and $errors.Count) {
+              $bad++
+              Write-Host ("PARSE ERROR " + $_.Name + ": " + $errors[0].Message)
+            }
+          }
+          if ($bad -gt 0) { exit 1 }
+      - name: Package (dir target only, no publish)
+        run: npx electron-builder --win dir --publish never

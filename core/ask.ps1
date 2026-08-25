@@ -21,7 +21,7 @@ $OutputEncoding = [Text.Encoding]::UTF8
 
 $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
+. (Join-Path $PSScriptRoot 'paths.ps1')   # sets $app (install) and $base (this user's data)
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
@@ -294,7 +294,8 @@ if ($digestSize -gt 1MB) {
 # The exact per-run file names go INTO the prompt: left to guess a suffixed
 # name the model spends turns listing the folder and can write its answer
 # where the script never looks for it.
-$prompt = (Get-Content (Join-Path $base $promptFile) -Raw -Encoding UTF8).
+$prompt = (Get-Content (Join-Path $app $promptFile) -Raw -Encoding UTF8).
+    Replace('{{DATA}}', $base).
     Replace('{{NOW}}', $now).
     Replace('{{DIGEST}}', ("ask-digest-$runToken.json")).
     Replace('{{OUT}}', ("ask-out-$runToken.json"))

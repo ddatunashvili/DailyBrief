@@ -20,7 +20,7 @@ $OutputEncoding = [Text.Encoding]::UTF8
 
 $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
+. (Join-Path $PSScriptRoot 'paths.ps1')   # sets $app (install) and $base (this user's data)
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
@@ -114,7 +114,7 @@ $STR = @{
     noteHead  = 'executed'
     noteFiles = 'dirty files'
 }
-$strPath = Join-Path $base 'strings-execute.json'
+$strPath = Join-Path $app 'strings-execute.json'
 if (Test-Path $strPath) {
     try {
         $sj = ([string](Get-Content $strPath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json
@@ -201,7 +201,8 @@ $briefLines = @(
 ) + @($subtasks | ForEach-Object { '  ' + $_ }) + @('COMMENTS:') + @($comments | ForEach-Object { '  ' + $_ })
 $briefText = ($briefLines -join "`r`n")
 
-$prompt = (Get-Content (Join-Path $base 'prompt-execute.md') -Raw -Encoding UTF8).
+$prompt = (Get-Content (Join-Path $app 'prompt-execute.md') -Raw -Encoding UTF8).
+    Replace('{{DATA}}', $base).
     Replace('{{NOW}}', $now).
     Replace('{{BRIEF}}', $briefText).
     Replace('{{DIR}}', $dir).

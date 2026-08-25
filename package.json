@@ -1,11 +1,12 @@
 {
   "name": "dailybrief-app",
-  "version": "1.5.2",
+  "version": "1.7.0",
   "description": "Daily briefing desktop app: Electron shell + background Claude pipeline + local MongoDB",
   "main": "main.js",
   "private": true,
   "scripts": {
     "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
     "build": "electron-builder --win dir",
     "release": "electron-builder --win --publish always"
   },
@@ -32,7 +33,24 @@
     "files": [
       "main.js",
       "preload.js",
+      "src/**",
+      "brief-app.html",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "core",
+        "to": "core",
+        "filter": [
+          "*.ps1",
+          "prompt*.md",
+          "strings*.json"
+        ]
+      },
+      {
+        "from": "build/icon.png",
+        "to": "build/icon.png"
+      }
     ],
     "win": {
       "target": [

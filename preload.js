@@ -66,6 +66,11 @@ contextBridge.exposeInMainWorld('dailybrief', {
   settingsGet: () => ipcRenderer.invoke('settings:get'),
   settingsSet: (patch) => ipcRenderer.invoke('settings:set', patch),
   appInfo: () => ipcRenderer.invoke('app:info'),
+  // Window zoom: browser-style Ctrl +/-/0, also driveable from the settings page.
+  zoomGet: () => ipcRenderer.invoke('zoom:get'),
+  zoomSet: (factor) => ipcRenderer.invoke('zoom:set', factor),
+  zoomStep: (dir) => ipcRenderer.invoke('zoom:step', dir),
+  onZoomChanged: (cb) => ipcRenderer.on('zoom:changed', (ev, factor) => cb(factor)),
   updateCheck: () => ipcRenderer.invoke('update:check'),
   updateState: () => ipcRenderer.invoke('update:state'),
   updateInstall: () => ipcRenderer.invoke('update:install'),

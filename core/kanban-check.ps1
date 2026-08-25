@@ -23,7 +23,7 @@ $OutputEncoding = [Text.Encoding]::UTF8
 
 $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$base   = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
+. (Join-Path $PSScriptRoot 'paths.ps1')   # sets $app (install) and $base (this user's data)
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
@@ -32,7 +32,7 @@ function Norm-Title([string]$s) { return ($s + '').Trim().ToLowerInvariant() }
 # Georgian UI strings live in a UTF-8 JSON file on purpose: this script stays
 # ASCII so PS 5.1 (which reads a BOM-less .ps1 as ANSI) can never mangle them.
 $STR = @{ autoBound = 'auto-linked folder:'; commentApplied = 'comment applied.'; commentFailed = 'comment failed.' }
-$strPath = Join-Path $base 'strings.json'
+$strPath = Join-Path $app 'strings.json'
 if (Test-Path $strPath) {
     try {
         $sj = Get-Content $strPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -208,7 +208,7 @@ foreach ($t in @($kanban.tasks | Where-Object { -not $_.done })) {
     else { $t | Add-Member -NotePropertyName aiNotes -NotePropertyValue @($notes) }
     # Baseline it immediately, otherwise the first check after binding reports
     # the whole repo as new work.
-    $null = & (Join-Path $base 'scan-folder.ps1') -TaskId ([string]$t.id) -Dir $guess 2>$null
+    $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$t.id) -Dir $guess 2>$null
     $bound = $true
 }
 if ($bound) { Save-Kanban $kanban }
@@ -383,7 +383,7 @@ if ($Generate) {
             # anything it emits (stray output, error records) would be captured
             # into the array and ConvertTo-Json would serialize whole .NET
             # object graphs into the digest (observed: a 391 MB digest file).
-            $null = & (Join-Path $base 'scan-folder.ps1') -TaskId ([string]$t.id) -Dir ([string]$dirs[0]) 2>$null
+            $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$t.id) -Dir ([string]$dirs[0]) 2>$null
         }
 
         $subtasks = @()
@@ -459,7 +459,8 @@ $promptFile = if ($Generate) { 'prompt-task-generate.md' }
 # The exact per-run file names go INTO the prompt. Left to guess a suffixed
 # name, the model spends turns listing the folder and can write the patch
 # where the script never looks for it.
-$prompt = (Get-Content (Join-Path $base $promptFile) -Raw -Encoding UTF8).
+$prompt = (Get-Content (Join-Path $app $promptFile) -Raw -Encoding UTF8).
+    Replace('{{DATA}}', $base).
     Replace('{{NOW}}', $now).
     Replace('{{DIGEST}}', ("check-digest-$runToken.json")).
     Replace('{{PATCH}}', ("check-patch-$runToken.json"))
@@ -570,7 +571,7 @@ if (Test-Path $patchPath) {
                 comments = @(); aiNotes = @(); dirs = $newDirs; subtasks = $ntSubs
             }
             if ($newDirs.Count -gt 0) {
-                $null = & (Join-Path $base 'scan-folder.ps1') -TaskId ([string]$n.id) -Dir ([string]$newDirs[0]) 2>$null
+                $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$n.id) -Dir ([string]$newDirs[0]) 2>$null
             }
             $fresh.tasks = @($fresh.tasks) + $nt
             $existingIds += [string]$n.id

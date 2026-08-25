@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Everything this page needs is in this file. 'unsafe-inline' covers the
+     inline <style>/<script> above; nothing may be fetched from the network,
+     which is what matters for a page that renders model-written text. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
 <title>დღიური ბრიფინგი</title>
 <style>
   /* Deliberately single-theme: committed dark design — blue accent on
@@ -613,6 +618,23 @@
   .set-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0;
              border-bottom: 1px solid var(--border); font-size: 0.88rem; }
   .set-row:last-child { border-bottom: 0; }
+  /* Zoom: the settings row and the pill that flashes on Ctrl +/-/0. */
+  .zoom-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0; }
+  .zoom-btn {
+    background: var(--surface); border: 1px solid var(--border); color: inherit;
+    border-radius: 8px; min-width: 2rem; padding: 0.25rem 0.5rem; cursor: pointer;
+    font-size: 0.95rem; line-height: 1.2;
+  }
+  .zoom-btn:hover { border-color: var(--accent); }
+  .zoom-val { min-width: 3.6rem; text-align: center; font-variant-numeric: tabular-nums; font-size: 0.86rem; }
+  .zoom-pill {
+    position: fixed; top: 1rem; left: 50%; transform: translateX(-50%);
+    z-index: 120; background: var(--surface); border: 1px solid var(--accent);
+    border-radius: 999px; padding: 0.3rem 0.85rem; font-size: 0.82rem;
+    font-variant-numeric: tabular-nums; box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    opacity: 0; transition: opacity 0.16s ease; pointer-events: none;
+  }
+  .zoom-pill.on { opacity: 1; }
   .set-row .hint { color: var(--muted); font-size: 0.74rem; }
   .set-status { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.6rem; }
 </style>
@@ -697,6 +719,10 @@
         <div id="update-box"></div>
       </section>
       <section class="an-section">
+        <h2>ზუმი</h2>
+        <div id="zoom-box"></div>
+      </section>
+      <section class="an-section">
         <h2>ავტომატიზაცია</h2>
         <div id="settings-toggles"></div>
       </section>
@@ -775,10 +801,11 @@
 
 <script>
 /*
-  ყოველდღიური განახლება: შეცვალე მხოლოდ BRIEF ობიექტი ქვემოთ,
-  BRIEF-DATA-START და BRIEF-DATA-END მარკერებს შორის. დანარჩენს ნუ ეხები.
-  ფორმატი: მკაცრი JSON (ყველა გასაღები ორმაგ ბრჭყალებში) — pipeline-სკრიპტი
-  ამ ბლოკს ავტომატურად ინახავს core\briefs\<date>.json-ად ისტორიისთვის.
+  ქვემოთ მოცემული BRIEF მხოლოდ ცარიელი ნიმუშია — მაშინ ჩანს, როცა აპის
+  IPC მიუწვდომელია (ბრაუზერი/ვებ-ასლი) ან ჯერ ერთი ბრიფიც არ დაწერილა.
+  რეალური მონაცემი ყოველთვის იკითხება მომხმარებლის data-საქაღალდიდან
+  (briefs\<date>.json) api.loadDay()-ით; ამ ფაილში pipeline აღარაფერს წერს —
+  ის დაინსტალირებული პროგრამის ნაწილია და ყველა მომხმარებელს აქვს საერთო.
 
   ველები:
     date        — "YYYY-MM-DD" (მონიშვნების გასაღები — ყოველ დღეს ახალი)
@@ -791,85 +818,13 @@
 */
 /*BRIEF-DATA-START*/
 const BRIEF = {
-  "date": "2026-08-24",
-  "dateLabel": "24 აგვისტო, ორშაბათი",
-  "tldr": "დღის დარჩენილი დრო: mail driver TODO-ს ტრივიალური დახურვა (5 დღეა გვერდზეა) და backup-pull-ის საბოლოო ვერიფიკაცია (2/4 ქვეტასკი უკვე დახურულია) პირველ რიგში, შემდეგ CHITI web/mobile-ის 5-დღიანი გაყინვის გატეხვა, Deploy History-ის დახურვა და ორგანულად დაწყებული ბილინგის (InvoiceHistory) ფილტრის პირველი ნაბიჯი.",
-  "tasks": [
-    {
-      "id": "chiti-web-forms",
-      "title": "CHITI web — ფორმების ვალიდაცია",
-      "desc": "**ChitiWeb** 5 დღეა Initial commit-ზეა (08-19). `ProjRegForm`/`ProjEditForm`/`ServiceRegisterForm`/`ServiceEditForm` ვალიდაცია დაუსრულებელია (0/5 ქვეტასკი). დღეს საჭირო პირველი რეალური commit.",
-      "weight": 30,
-      "badge": "30% დროის"
-    },
-    {
-      "id": "chiti-mobile-build",
-      "title": "CHITI mobile — Android build",
-      "desc": "**CHITIApp** ასევე 5 დღეა Initial commit-ზეა (0/5 ქვეტასკი). scaffold მზადაა (`build.gradle`, `MainActivity.kt`), საჭიროა Expo dev build-ის ერთი რეალური მცდელობა ფიზიკურ მოწყობილობაზე.",
-      "weight": 20,
-      "badge": "20% დროის"
-    },
-    {
-      "id": "umt097bresnqi",
-      "title": "InfoCommand.php mail driver TODO",
-      "desc": "მე-5 ზედიზედ დღეა ხელუხლებელი (0/4 ქვეტასკი), მიუხედავად ყოველდღიური RENODE commit-ებისა. 4-ხაზიანი, `config('mail.default')`-ზე დაფუძნებული ტრივიალური fix — დღეს ეს პირველი დახურე.",
-      "weight": 15,
-      "badge": "15% დროის"
-    },
-    {
-      "id": "umt0yas07u52f",
-      "title": "RENODE PANEL — Deploy History route + retention",
-      "desc": "`deploy_logs` migration, log-ჩაწერა და React კომპონენტი მზადაა 08-20-დან, მაგრამ `RouteServiceProvider.php`-ში route-ის რეგისტრაცია და retention job კვლავ pending-ია (4-ჯერ ზედიზედ).",
-      "weight": 15,
-      "badge": "15% დროის"
-    },
-    {
-      "id": "umt0977k1d79m",
-      "title": "backup-pull ლოგ-როტაციის საბოლოო დახურვა",
-      "desc": "log rotation (08-23 commit) და cleanup დახურულია — 2/4 ქვეტასკი შესრულებული. დარჩა მხოლოდ `.backup-pull-state.json` ვალიდაცია და tray-ისტორიის ტესტი, შემდეგ დაფაზე დახურვა.",
-      "weight": 10,
-      "badge": "10% დროის"
-    },
-    {
-      "id": "umt7l80qxx2vv",
-      "title": "InvoiceHistory ფილტრი — პირველი ნაბიჯი",
-      "desc": "დღეს ორგანულად დაიწყო ბილინგის მუშაობა (Invoice.php, UserBillingController.php, billing.blade.php დაუკომიტებელია) — 3 ახალი planning ტასკი შეიქმნა. პირველი ნაბიჯი: `Invoice.php`-ში `scopeFilter()` მეთოდის დაწერა status/date/search პარამეტრებზე.",
-      "weight": 10,
-      "badge": "10% დროის"
-    }
-  ],
-  "warnings": [
-    {
-      "sev": "crit",
-      "label": "CHITI web/mobile გაყინული",
-      "text": "**ChitiWeb** და **CHITIApp** 5 დღეა (08-19-დან) Initial commit-ზეა, ChitiBackend-ის ყოველდღიური განვითარების პარალელურად."
-    },
-    {
-      "sev": "warn",
-      "label": "mail driver TODO — მე-5 დღე",
-      "text": "`InfoCommand.php:61` TODO მე-5 ზედიზედ დღეა იგნორირებულია, მიუხედავად RENODE PANEL-ის ყოველდღიური commit-ებისა."
-    },
-    {
-      "sev": "warn",
-      "label": "Deploy History pending",
-      "text": "Route-ის რეგისტრაცია და retention job 08-20-დან pending-ია, ყურადღება სხვა RENODE ფუნქციებზე გადავიდა."
-    },
-    {
-      "sev": "note",
-      "label": "backup-pull თითქმის დახურულია",
-      "text": "2/4 ქვეტასკი დახურულია (log rotation + cleanup) — მხოლოდ state-ვალიდაცია და tray-ტესტი დარჩა."
-    }
-  ],
-  "recap": [
-    "RENODE PANEL: 08-23-ს backup-pull ლოგ-როტაცია დაკომიტდა, root რეფაქტორი (`ops/`, `docs/legacy`) დასრულდა.",
-    "ChitiBackend: 08-24-ს placeholder სურათები shop/product-ებზე, 08-23-ს backend fix PR merge.",
-    "CHITI ბექენდის `main`-ში merge (roadmap, compat layer, Prisma 7) 08-20-ს დასრულდა — დახურულია.",
-    "დღეს: backup-pull-ის 2/4 ქვეტასკი დაიხურა, RENODE PANEL-ზე ორგანულად დაიწყო ბილინგის (InvoiceHistory/UserBilling) მუშაობა."
-  ],
-  "assessment": [
-    "დღის დარჩენილი ნაწილისთვის ორი სწრაფი დახურვა პირველ რიგშია საჭირო — mail driver TODO (5-ჯერ გადავადებული, ტრივიალური) და backup-pull-ის უკვე თითქმის დასრულებული ვერიფიკაცია.",
-    "CHITI web/mobile კვლავ 5-დღიანი გაყინვის ყველაზე დიდი რისკია — თუ დღეს არცერთ repo-ში commit არ გაჩნდება, ეს მე-6 ზედიზედ დღე იქნება. ახლად დაწყებული ბილინგის (InvoiceHistory) მუშაობა ჯერჯერობით მხოლოდ პირველი ნაბიჯით შედის გეგმაში, სანამ პრიორიტეტულობა არ დადასტურდება."
-  ]
+  "date": "",
+  "dateLabel": "დღიური ბრიფინგი",
+  "tldr": "დღევანდელი ბრიფი ჯერ არ არის. აპი დღის გეგმას ფონურად ამზადებს — ცოტა ხანში განახლდება.",
+  "tasks": [],
+  "warnings": [],
+  "recap": [],
+  "assessment": []
 };
 /*BRIEF-DATA-END*/
 
@@ -1079,6 +1034,33 @@ const BRIEF = {
 
   var kb = { tasks: [], archive: [] };
   var boardEl = document.getElementById("board");
+  /* Wheel over the board pans it sideways, the way a browser does with
+     Shift+wheel. A plain wheel still scrolls a column first and only spills
+     into the horizontal pan once that column has nothing left to give. */
+  if (boardEl) {
+    boardEl.addEventListener("wheel", function (e) {
+      if (e.ctrlKey) return;                       // Ctrl+wheel stays zoom
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;  // real trackpad pan
+      var max = boardEl.scrollWidth - boardEl.clientWidth;
+      if (max <= 0) return;
+      if (!e.shiftKey) {
+        // Let an inner vertical scroller consume the wheel if it still can.
+        var n = e.target;
+        while (n && n !== boardEl) {
+          if (n.scrollHeight > n.clientHeight + 1) {
+            var room = e.deltaY < 0 ? n.scrollTop : n.scrollHeight - n.clientHeight - n.scrollTop;
+            if (room > 1) return;
+          }
+          n = n.parentNode;
+        }
+      }
+      var next = Math.max(0, Math.min(max, boardEl.scrollLeft + e.deltaY));
+      if (next === boardEl.scrollLeft) return;
+      boardEl.scrollLeft = next;
+      e.preventDefault();
+    }, { passive: false });
+  }
+
   var archiveListEl = document.getElementById("archive-list");
   var archiveCountEl = document.getElementById("archive-count");
 
@@ -2599,6 +2581,60 @@ const BRIEF = {
     });
     updateStateCache = await api.updateState();
     paintUpdateBox();
+    if (api.zoomGet) { zoomFactor = (await api.zoomGet()).factor; }
+    paintZoomBox();
+  }
+
+  /* ---- window zoom (Ctrl +/-/0, Ctrl+wheel, and this box) ---- */
+
+  var zoomPill = el("div", "zoom-pill");
+  document.body.appendChild(zoomPill);
+  var zoomPillTimer = null;
+  var zoomFactor = 1;
+
+  function fmtZoom(f) { return Math.round(f * 100) + "%"; }
+
+  function flashZoom(f) {
+    zoomPill.textContent = fmtZoom(f);
+    zoomPill.classList.add("on");
+    if (zoomPillTimer) clearTimeout(zoomPillTimer);
+    zoomPillTimer = setTimeout(function () { zoomPill.classList.remove("on"); }, 1100);
+  }
+
+  function paintZoomBox() {
+    var box = document.getElementById("zoom-box");
+    if (!box) return;
+    box.innerHTML = "";
+    if (!api || !api.zoomGet) {
+      box.appendChild(el("div", "hint", "ზუმი მხოლოდ აპში მუშაობს."));
+      return;
+    }
+    var row = el("div", "zoom-row");
+    function btn(label, title, fn) {
+      var b = el("button", "zoom-btn", label);
+      b.title = title;
+      b.addEventListener("click", async function () {
+        zoomFactor = await fn();
+        flashZoom(zoomFactor);
+        paintZoomBox();
+      });
+      return b;
+    }
+    row.appendChild(btn("−", "დაპატარავება (Ctrl+-)", function () { return api.zoomStep(-1); }));
+    row.appendChild(el("div", "zoom-val", fmtZoom(zoomFactor)));
+    row.appendChild(btn("+", "გადიდება (Ctrl++)", function () { return api.zoomStep(1); }));
+    row.appendChild(btn("100%", "საწყისზე დაბრუნება (Ctrl+0)", function () { return api.zoomSet(1); }));
+    box.appendChild(row);
+    box.appendChild(el("div", "hint", "Ctrl და +/− ან Ctrl+თაგვის ბორბალი; Ctrl+0 საწყისზე აბრუნებს."));
+  }
+
+  if (api && api.zoomGet) {
+    api.zoomGet().then(function (z) { zoomFactor = z.factor; paintZoomBox(); });
+    if (api.onZoomChanged) {
+      try {
+        api.onZoomChanged(function (f) { zoomFactor = f; flashZoom(f); paintZoomBox(); });
+      } catch (e) {}
+    }
   }
 
   if (api && api.onUpdateState) {
@@ -2609,7 +2645,7 @@ const BRIEF = {
 
   /* ---- bottom AI-activity popup ---- */
 
-  var AI_EXPECTED = { full: 900, replan: 300, check: 120, "task-replan": 150, "task-generate": 120, "task-command": 120, ask: 90, ideas: 90, execute: 900 }; // seconds, rough
+  var AI_EXPECTED = { full: 90, replan: 70, check: 120, "task-replan": 150, "task-generate": 120, "task-command": 120, ask: 90, ideas: 90, execute: 900 }; // seconds, rough
   var AI_LABELS = {
     full: "AI ადგენს დღის ბრიფინგს…",
     replan: "AI გეგმავს დღეს თავიდან…",

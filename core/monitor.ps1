@@ -5,7 +5,8 @@
 param([int]$WindowMinutes = 40)
 
 $ErrorActionPreference = 'SilentlyContinue'
-$outDir = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core\analytics'
+. (Join-Path $PSScriptRoot 'paths.ps1')   # sets $app (install) and $base (this user's data)
+$outDir = Join-Path $base 'analytics'
 New-Item -ItemType Directory -Force $outDir | Out-Null
 
 $exclude = 'AppData|node_modules|\\\.git|\\Temp|C:\\Windows|Program Files|DailyBrief|\\\.vscode|__pycache__|\\\.venv|\\venv\\|\\Recent|\\\$Recycle|\\\.next|\\\.nuxt|\\\.output|\\\.turbo|\\\.cache|\\dist\\|\\coverage\\|Cache'
@@ -34,7 +35,7 @@ function Get-ProjectDir([string]$dir) {
 # Folders the user muted on the "ignored" page never produce an event, so they
 # stay out of analytics, out of the project registry and out of every digest.
 $ignoreDirs = @()
-$ignorePath = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core\ignore.json'
+$ignorePath = Join-Path $base 'ignore.json'
 if (Test-Path $ignorePath) {
     try {
         $ij = ([string](Get-Content $ignorePath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json

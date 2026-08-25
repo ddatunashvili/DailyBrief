@@ -47,11 +47,22 @@ The design goal is minimal AI spend:
 ## Setup
 
 1. `npm install`
-2. Adjust the hardcoded base paths in `core/*.ps1` and `main.js` (`ROOT`) to your machine.
+2. `npm test` — unit tests for the pure parts (`src/`).
 3. `npm run build` — builds `output/win-unpacked/DailyBrief.exe` and an NSIS installer. `npm run release` publishes a GitHub release (needs `GH_TOKEN`) that installed copies auto-update from.
 4. Optionally register a logon scheduled task pointing at the built exe — the app runs the morning pipeline on start.
 5. Requires the Claude Code CLI installed and authenticated (`claude`), and git for repo-aware scanning.
 
 ## Privacy
 
-The monitor and snapshots record directory paths, file names and timestamps. The project registry additionally extracts, locally: git branch/commit subjects/`git status`, the first 400 characters of `README.md`, the `package.json` description and dependency names, and TODO/FIXME lines from tracked source files. Only these extracts reach the model — your files are never opened by the AI itself, and nothing is sent anywhere but the model that writes your briefing. Ignored folders are excluded before anything is collected — the monitor never logs them and no digest can mention them. All personal data (briefings, board, analytics, registry, chat history, feature ideas, database) stays in `core/` and is git-ignored.
+The monitor and snapshots record directory paths, file names and timestamps. The project registry additionally extracts, locally: git branch/commit subjects/`git status`, the first 400 characters of `README.md`, the `package.json` description and dependency names, and TODO/FIXME lines from tracked source files. Only these extracts reach the model — your files are never opened by the AI itself, and nothing is sent anywhere but the model that writes your briefing. Ignored folders are excluded before anything is collected — the monitor never logs them and no digest can mention them. All personal data (briefings, board, analytics, registry, chat history, feature ideas, database) stays in this user's own data folder and never leaves the machine.
+
+## Where things live
+
+The install and the data are two separate places, and only the second one is yours:
+
+- **Install** — `brief-app.html`, `main.js`, `src/`, and `core/*.ps1` with their prompts. Read-only at runtime, shared by everyone on the machine. In a packaged build the scripts sit in `resources/core`.
+- **Data** — `%APPDATA%\DailyBrief\data` in a packaged build, `core/` when running from a checkout. One folder per Windows account: its own `dailybrief.db`, board, briefs, registry and run logs, so two people on one PC never see each other's day. Set `DAILYBRIEF_DATA` to put it somewhere else; every PowerShell script reads the same variable.
+
+Upgrading from a build that kept data inside the project folder: the first packaged run copies that data across once and leaves the old folder untouched as a backup.
+
+Run logs and per-run digests are pruned to the newest 20 of each kind at startup and once a day after.

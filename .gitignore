@@ -34,3 +34,11 @@ core/dailybrief.db-wal
 *.log
 core/ai-problems.jsonl
 core/ai-diagnostics.txt
+
+# per-run pipeline files (pruned at runtime, never committed)
+core/brief-digest*.json
+core/brief-out*.json
+core/execute-out*.json
+core/execute-request.json
+core/publish-*.html
+core/publish.json

@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$base  = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
+. (Join-Path $PSScriptRoot 'paths.ps1')   # sets $app (install) and $base (this user's data)
 $scans = Join-Path $base 'scans'
 New-Item -ItemType Directory -Force $scans | Out-Null
 if (-not (Test-Path $Dir)) { exit 1 }

@@ -1,216 +1,139 @@
 // DailyBrief Electron shell.
 // Opens brief-app.html in an app window and kicks off the daily pipeline
-// (core\daily-brief.ps1) hidden in the background. When the pipeline rewrites
-// brief-app.html (new BRIEF data), the window reloads automatically.
+// (core\daily-brief.ps1) hidden in the background. The page never changes on
+// disk: it reads each day's brief over IPC from the user's data folder.
 //
-// Storage: local MongoDB (db "dailybrief", collections "briefs" and "done").
-// The pipeline still works through files — core\briefs\*.json (extracted from
-// the BRIEF block) and core\done\*.json (what Claude reads next morning) — so
-// files are synced into Mongo on start and after each pipeline run, and every
-// done-save is mirrored back to disk. If MongoDB is down, the app falls back
-// to files and keeps working.
+// Storage: an embedded SQLite file (dailybrief.db) in that same data folder,
+// one kv table. The pipeline works through files — briefs\*.json (today's
+// plan) and done\*.json (what Claude reads next morning) — so files are
+// synced into the store on start and after each run, and every done-save is
+// mirrored back to disk. If SQLite can't open, the app falls back to the
+// files and keeps working.
+//
+// The pure parts live in src\: text repair and json reading (text.js), the kv
+// store (kv.js), run-file pruning (prune.js), the zoom ladder (zoom.js).
 
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { DATE_RE, listDates, deepFixMojibake, readJson } = require('./src/text');
+const { initKv, kvReady, kvClose, kvGet, kvSet, kvKeys } = require('./src/kv');
+const { pruneRunFiles: pruneDir } = require('./src/prune');
+const { ZOOM_STEPS, clampZoom, nextZoom } = require('./src/zoom');
 
-// The packaged exe runs from output\win-unpacked, but the live project
-// (page, core, pipeline) stays at the project root so Claude's daily
-// edits keep reaching the running app.
-const ROOT = app.isPackaged
-  ? 'C:\\Users\\davit\\OneDrive\\Desktop\\DailyBriefApp'
-  : __dirname;
+// Two roots, and they must not be confused.
+//
+//   APP_ROOT  - what the installer put on disk: the page, the icon and the
+//               core\*.ps1 scripts with their prompts. Shared by everyone on
+//               the machine, read-only, never written to at runtime.
+//   DATA      - this user's own folder: briefs, kanban, the SQLite file, run
+//               logs. One per Windows account, so two people on one PC never
+//               see each other's day. Overridable with DAILYBRIEF_DATA, which
+//               is also how a checked-out repo keeps its data in core\.
+//
+// A packaged build keeps core\ outside the asar (extraResources), so the
+// scripts stay real files PowerShell can run.
+const APP_ROOT = app.isPackaged ? process.resourcesPath : __dirname;
+const CORE_DIR = path.join(APP_ROOT, 'core');
+const DATA = process.env.DAILYBRIEF_DATA
+  || (app.isPackaged ? path.join(app.getPath('userData'), 'data') : CORE_DIR);
 
-const PAGE = path.join(ROOT, 'brief-app.html');
-const PIPELINE = path.join(ROOT, 'core', 'daily-brief.ps1');
-const BRIEFS_DIR = path.join(ROOT, 'core', 'briefs');
-const LEGACY_DIR = path.join(ROOT, 'core', 'briefings');
-const DONE_DIR = path.join(ROOT, 'core', 'done');
-const PLANS_FILE = path.join(ROOT, 'core', 'plans.json');
-const KANBAN_FILE = path.join(ROOT, 'core', 'kanban.json');
-const CHECK_SCRIPT = path.join(ROOT, 'core', 'kanban-check.ps1');
-const MONITOR_SCRIPT = path.join(ROOT, 'core', 'monitor.ps1');
+// The page ships inside the asar in a packaged build, so it is addressed from
+// the app path, not from resources.
+const PAGE = path.join(app.isPackaged ? app.getAppPath() : __dirname, 'brief-app.html');
+
+// Scripts: install side.
+const PIPELINE = path.join(CORE_DIR, 'daily-brief.ps1');
+const CHECK_SCRIPT = path.join(CORE_DIR, 'kanban-check.ps1');
+const MONITOR_SCRIPT = path.join(CORE_DIR, 'monitor.ps1');
 // Project registry: what the user's folders actually ARE (stack, commits,
 // dirty files, TODOs). Built by a script, read by every AI run and the UI.
-const DISCOVER_SCRIPT = path.join(ROOT, 'core', 'discover-projects.ps1');
-const PROJECTS_FILE = path.join(ROOT, 'core', 'projects.json');
+const DISCOVER_SCRIPT = path.join(CORE_DIR, 'discover-projects.ps1');
 // Ask + ideas: two AI modes that only ever read the registry (core\ask.ps1).
-const ASK_SCRIPT = path.join(ROOT, 'core', 'ask.ps1');
-const ASK_LOG_FILE = path.join(ROOT, 'core', 'ask-log.json');
-const IDEAS_FILE = path.join(ROOT, 'core', 'ideas.json');
-const IGNORE_FILE = path.join(ROOT, 'core', 'ignore.json');
+const ASK_SCRIPT = path.join(CORE_DIR, 'ask.ps1');
 // The only run that edits a real project: own branch, VS Code, Bash.
-const EXECUTE_SCRIPT = path.join(ROOT, 'core', 'execute.ps1');
-const EXECUTE_REQUEST_FILE = path.join(ROOT, 'core', 'execute-request.json');
-const QUESTIONS_FILE = path.join(ROOT, 'core', 'questions.json');
-const ANALYTICS_DIR = path.join(ROOT, 'core', 'analytics');
-const SNAP_DIR = path.join(ROOT, 'core', 'snapshots');
-const ICON = path.join(ROOT, 'build', 'icon.png');
+const EXECUTE_SCRIPT = path.join(CORE_DIR, 'execute.ps1');
+
+// Data: user side.
+const BRIEFS_DIR = path.join(DATA, 'briefs');
+const LEGACY_DIR = path.join(DATA, 'briefings');
+const DONE_DIR = path.join(DATA, 'done');
+const PLANS_FILE = path.join(DATA, 'plans.json');
+const KANBAN_FILE = path.join(DATA, 'kanban.json');
+const PROJECTS_FILE = path.join(DATA, 'projects.json');
+const ASK_LOG_FILE = path.join(DATA, 'ask-log.json');
+const IDEAS_FILE = path.join(DATA, 'ideas.json');
+const IGNORE_FILE = path.join(DATA, 'ignore.json');
+const EXECUTE_REQUEST_FILE = path.join(DATA, 'execute-request.json');
+const QUESTIONS_FILE = path.join(DATA, 'questions.json');
+const ANALYTICS_DIR = path.join(DATA, 'analytics');
+const SNAP_DIR = path.join(DATA, 'snapshots');
+const ICON = path.join(APP_ROOT, 'build', 'icon.png');
 
 // Own embedded database: SQLite file next to the data (no external server).
-const DB_FILE = path.join(ROOT, 'core', 'dailybrief.db');
+const DB_FILE = path.join(DATA, 'dailybrief.db');
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// Every PowerShell child reads DAILYBRIEF_DATA to find the same folder this
+// process picked, so main.js is the single place that decides where data goes.
+const PS_ENV = Object.assign({}, process.env, { DAILYBRIEF_DATA: DATA });
+const PS_OPTS = { windowsHide: true, stdio: 'ignore', env: PS_ENV };
 
-let win = null;
-let db = null;
-
-// Second launch (e.g. logon task while app already open): focus the existing window.
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (win && !win.isDestroyed()) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    }
-  });
+// First run on a new account: create the folders the scripts expect to exist.
+// Cheap enough to do unconditionally, and it keeps every writer downstream
+// free of "does the parent exist" checks.
+function ensureDataDirs() {
+  for (const d of [DATA, BRIEFS_DIR, DONE_DIR, ANALYTICS_DIR, SNAP_DIR, path.join(DATA, 'scans')]) {
+    try { fs.mkdirSync(d, { recursive: true }); } catch (e) { /* surfaced later by the first read */ }
+  }
 }
-
-/* ---------- file helpers ---------- */
-
-function listDates(dir, ext) {
+// Upgrade path for the builds that kept data inside the project folder: if
+// this account has such a folder and its new data dir is still empty, move
+// the data across once. Nothing is deleted — the old folder stays behind as
+// its own backup — and the check is by folder shape, not by user name, so it
+// is a no-op on a machine that never ran an older build.
+function migrateLegacyData() {
+  if (fs.existsSync(path.join(DATA, 'kanban.json'))) return;
+  const home = app.getPath('home');
+  const legacy = [
+    path.join(home, 'OneDrive', 'Desktop', 'DailyBriefApp', 'core'),
+    path.join(home, 'Desktop', 'DailyBriefApp', 'core')
+  ].find((d) => d !== DATA && fs.existsSync(path.join(d, 'kanban.json')));
+  if (!legacy) return;
+  // Only the data. The scripts and prompts sitting next to it belong to the
+  // install now, and copying them would leave two divergent copies.
+  // The -wal/-shm siblings come along: a database copied without its
+  // write-ahead log loses whatever had not been checkpointed yet.
+  const keep = /^(kanban|plans|projects|ideas|ignore|questions|ask-log|publish)\.json$|^(GOALS|STATE|PROGRESS)\.md$|^dailybrief\.db(-wal|-shm)?$|^(dirs|top-dirs)\.txt$|^ai-(runs|problems)\.jsonl$/;
+  const dirs = ['briefs', 'briefings', 'done', 'analytics', 'snapshots', 'scans'];
   try {
-    return fs.readdirSync(dir)
-      .filter((f) => f.endsWith(ext) && DATE_RE.test(f.slice(0, 10)))
-      .map((f) => f.slice(0, 10));
-  } catch (e) {
-    return [];
-  }
-}
-
-// Repairs text corrupted by an earlier, less-hardened version of the PS
-// scripts: UTF-8 bytes misread as Windows-1252, then re-saved as UTF-8.
-// Latin-1 round-tripping can't invert that — cp1252 maps bytes 0x80–0x9F
-// (present in every Georgian UTF-8 sequence, e.g. 0x83 → U+0192 "ƒ") to
-// characters outside Latin-1 — so the reversal needs cp1252's own table.
-// Works segment-by-segment on non-ASCII runs so strings that mix clean
-// Georgian with mojibake still heal. A run is only replaced when every
-// character maps back to a cp1252 byte AND those bytes decode as clean
-// multi-byte UTF-8 — a no-op on ASCII/English/already-correct text.
-const CP1252_REVERSE = {
-  0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85,
-  0x2020: 0x86, 0x2021: 0x87, 0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A,
-  0x2039: 0x8B, 0x0152: 0x8C, 0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92,
-  0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
-  0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B, 0x0153: 0x9C,
-  0x017E: 0x9E, 0x0178: 0x9F
-};
-
-function cp1252Bytes(s) {
-  const out = Buffer.alloc(s.length);
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    const b = c <= 0xFF ? c : CP1252_REVERSE[c];
-    if (b === undefined) return null;
-    out[i] = b;
-  }
-  return out;
-}
-
-function fixMojibake(s) {
-  if (typeof s !== 'string' || s.length < 2) return s;
-  return s.replace(/[^\x00-\x7F]{2,}/g, (run) => {
-    if (/[Ⴀ-ჿ]/.test(run)) return run; // already-correct Georgian
-    const bytes = cp1252Bytes(run);
-    if (!bytes) return run; // contains chars cp1252 can't produce — not mojibake
-    let fixed = bytes.toString('utf8');
-    // The original corrupter DROPPED some bytes it couldn't map (e.g. 0x90),
-    // leaving an incomplete trailing UTF-8 sequence — decode ends in U+FFFD.
-    // That last letter is unrecoverable; strip it rather than keep mojibake.
-    fixed = fixed.replace(/�+$/, '');
-    // Shorter output proves multi-byte sequences decoded; interior U+FFFD
-    // means real garbage — leave those untouched.
-    return (fixed.length < run.length && fixed.indexOf('�') === -1) ? fixed : run;
-  });
-}
-
-// Walks objects/arrays and repairs every string leaf. Returns the SAME
-// reference when nothing changed, so callers can cheaply detect "was this
-// touched" via `fixed !== original` and only write back when needed.
-function deepFixMojibake(value) {
-  if (typeof value === 'string') return fixMojibake(value);
-  if (Array.isArray(value)) {
-    let changed = false;
-    const out = value.map((v) => { const f = deepFixMojibake(v); if (f !== v) changed = true; return f; });
-    return changed ? out : value;
-  }
-  if (value && typeof value === 'object') {
-    let changed = false;
-    const out = {};
-    for (const k of Object.keys(value)) {
-      const fv = deepFixMojibake(value[k]);
-      if (fv !== value[k]) changed = true;
-      out[k] = fv;
+    for (const f of fs.readdirSync(legacy)) {
+      const src = path.join(legacy, f);
+      const dst = path.join(DATA, f);
+      if (fs.existsSync(dst)) continue;
+      if (keep.test(f)) fs.copyFileSync(src, dst);
+      else if (dirs.includes(f) && fs.statSync(src).isDirectory()) fs.cpSync(src, dst, { recursive: true });
     }
-    return changed ? out : value;
-  }
-  return value;
+  } catch (e) { /* a partial copy still beats starting empty */ }
 }
+if (app.isPackaged) migrateLegacyData();
+ensureDataDirs();
 
-function readJson(file) {
-  try {
-    // PS 5.1 tools write UTF-8 with BOM — strip it before parsing.
-    const obj = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
-    const fixed = deepFixMojibake(obj);
-    // Self-heal: persist the repair so future reads (including the PS
-    // scripts themselves) see clean data, not just this one render.
-    if (fixed !== obj) {
-      try { fs.writeFileSync(file, JSON.stringify(fixed, null, 2), 'utf8'); } catch (e) { /* repair still returned below */ }
-    }
-    return fixed;
-  } catch (e) {
-    return null;
-  }
-}
+// Run files pile up in the data folder; the module decides which families
+// exist and how many of each to keep.
+function pruneRunFiles() { pruneDir(DATA); }
 
-/* ---------- SQLite (embedded, core\dailybrief.db) ---------- */
+/* ---------- SQLite (this user's dailybrief.db) ---------- */
 
 function initDb() {
-  try {
-    const Database = require('better-sqlite3');
-    db = new Database(DB_FILE);
-    db.pragma('journal_mode = WAL');
-    db.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-    syncFilesToDb();
-  } catch (e) {
-    db = null; // SQLite unavailable (e.g. ABI mismatch): file fallback keeps working
-  }
-}
-
-function kvGet(key) {
-  if (!db) return null;
-  try {
-    const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(key);
-    if (!row) return null;
-    const obj = JSON.parse(row.value);
-    const fixed = deepFixMojibake(obj);
-    if (fixed !== obj) kvSet(key, fixed);
-    return fixed;
-  } catch (e) { return null; }
-}
-
-function kvSet(key, obj) {
-  if (!db) return;
-  try {
-    db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ' +
-      'ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-      .run(key, JSON.stringify(obj));
-  } catch (e) { /* file mirror still persists it */ }
-}
-
-function kvKeys(prefix) {
-  if (!db) return [];
-  try {
-    return db.prepare("SELECT key FROM kv WHERE key LIKE ? || '%'").all(prefix)
-      .map((r) => r.key.slice(prefix.length));
-  } catch (e) { return []; }
+  // A store that failed to open is not fatal: every reader below falls back
+  // to the JSON files the PowerShell side writes.
+  if (initKv(DB_FILE)) syncFilesToDb();
 }
 
 function syncFilesToDb() {
-  if (!db) return;
+  if (!kvReady()) return;
   // briefs + kanban: written by the pipeline — files are the source of truth.
   listDates(BRIEFS_DIR, '.json').forEach((date) => {
     const brief = readJson(path.join(BRIEFS_DIR, date + '.json'));
@@ -435,7 +358,7 @@ function runDiscover() {
   const ps = spawn('powershell.exe', [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
     '-File', DISCOVER_SCRIPT
-  ], { windowsHide: true, stdio: 'ignore' });
+  ], PS_OPTS);
   ps.on('error', () => { discoverRunning = false; });
   ps.on('exit', () => {
     discoverRunning = false;
@@ -605,10 +528,50 @@ ipcMain.handle('settings:set', (ev, patch) => {
   return cur;
 });
 
+/* Window zoom: the same ladder a browser walks with Ctrl +/-/0, kept in the
+   database so the window opens at the size the user left it. */
+
+function readZoom() {
+  return clampZoom(kvGet('zoomFactor'));
+}
+
+function applyZoom(factor, notify) {
+  const f = clampZoom(factor);
+  kvSet('zoomFactor', f);
+  if (win && !win.isDestroyed()) {
+    win.webContents.setZoomFactor(f);
+    if (notify !== false) win.webContents.send('zoom:changed', f);
+  }
+  return f;
+}
+
+// Next rung up or down the ladder from wherever the current factor sits.
+function stepZoom(dir) { return applyZoom(nextZoom(readZoom(), dir)); }
+
+// Ctrl +/-/0 and Ctrl+wheel, wired on the window's web contents because the
+// menu bar (and with it the default accelerators) is hidden.
+function wireZoom(w) {
+  const wc = w.webContents;
+  wc.on('did-finish-load', () => { wc.setZoomFactor(readZoom()); });
+  wc.on('before-input-event', (ev, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+    const k = String(input.key || '');
+    if (k === '+' || k === '=' || k === 'Add') { ev.preventDefault(); stepZoom(1); }
+    else if (k === '-' || k === '_' || k === 'Subtract') { ev.preventDefault(); stepZoom(-1); }
+    else if (k === '0') { ev.preventDefault(); stepZoom(0); }
+  });
+  wc.on('zoom-changed', (ev, direction) => { stepZoom(direction === 'in' ? 1 : -1); });
+}
+
+ipcMain.handle('zoom:get', () => ({ factor: readZoom(), steps: ZOOM_STEPS }));
+ipcMain.handle('zoom:set', (ev, factor) => applyZoom(factor));
+ipcMain.handle('zoom:step', (ev, dir) => stepZoom(Number(dir) || 0));
+
 ipcMain.handle('app:info', () => ({
   version: app.getVersion(),
   packaged: app.isPackaged,
-  root: ROOT
+  appRoot: APP_ROOT,
+  dataDir: DATA
 }));
 
 // Folder-drop task creation: resolve a dropped path to its directory + name.
@@ -703,8 +666,11 @@ function estimateRun(mode) {
     };
   }
   const d = EST_DEFAULTS[mode] || EST_DEFAULTS.check;
+  // Seeds only: after a few runs the journal's own average takes over. full
+  // and replan dropped to a minute once the digest replaced the model's own
+  // file reads, so the old 7-minute seed made every morning look overdue.
   const durations = {
-    full: 420, replan: 240, check: 90, 'task-replan': 100,
+    full: 90, replan: 70, check: 90, 'task-replan': 100,
     'task-generate': 90, 'task-command': 80, ask: 70, ideas: 70, execute: 900
   };
   return {
@@ -717,7 +683,7 @@ function estimateRun(mode) {
    and cost (parsed from the CLI's json output in the run log), and status
    (ok / killed / skipped — a check that exited early on zero activity).
    The AI page reads this and can kill any currently running entry by id. */
-const AI_RUNS_FILE = path.join(ROOT, 'core', 'ai-runs.jsonl');
+const AI_RUNS_FILE = path.join(DATA, 'ai-runs.jsonl');
 
 /* Everything that can go wrong with a run — a CLI that never started, a model
    that stopped at the turn limit halfway through the work, an answer file that
@@ -725,15 +691,15 @@ const AI_RUNS_FILE = path.join(ROOT, 'core', 'ai-runs.jsonl');
    is pushed to the window as an ai:problem event. Before this, every one of
    those cases was journaled as "ok" and the user saw a run that "succeeded"
    while nothing changed. */
-const AI_PROBLEMS_FILE = path.join(ROOT, 'core', 'ai-problems.jsonl');
-const AI_DIAG_FILE = path.join(ROOT, 'core', 'ai-diagnostics.txt');
+const AI_PROBLEMS_FILE = path.join(DATA, 'ai-problems.jsonl');
+const AI_DIAG_FILE = path.join(DATA, 'ai-diagnostics.txt');
 
 // Hard ceiling per mode (seconds). A hung claude otherwise sits in activeRuns
 // forever: the spinner never stops, one of MAX_CONCURRENT_AI slots stays gone,
 // and for the pipeline `pipelineRunning` stays true so no daily run ever
 // starts again.
 const RUN_TIMEOUT_SEC = {
-  full: 2400, replan: 1500, check: 900, 'task-replan': 900,
+  full: 900, replan: 600, check: 900, 'task-replan': 900,
   'task-generate': 900, 'task-command': 900, ask: 600, ideas: 600, execute: 3600
 };
 
@@ -989,7 +955,7 @@ function runWatchdog() {
     }
     if (!run.timedOut && elapsed > timeoutSec(run.mode)) {
       run.timedOut = true;
-      spawn('taskkill', ['/PID', String(run.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+      spawn('taskkill', ['/PID', String(run.pid), '/T', '/F'], PS_OPTS);
     }
   }
 }
@@ -1029,14 +995,14 @@ ipcMain.handle('ai:openDiagnostics', () => {
 });
 
 // Folder scanner: baseline snapshot for a task's linked folder (git-aware).
-const SCAN_SCRIPT = path.join(ROOT, 'core', 'scan-folder.ps1');
+const SCAN_SCRIPT = path.join(CORE_DIR, 'scan-folder.ps1');
 
 ipcMain.handle('task:scan', (ev, taskId, dir) => {
   if (!taskId || !dir) return false;
   spawn('powershell.exe', [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
     '-File', SCAN_SCRIPT, '-TaskId', String(taskId).slice(0, 60), '-Dir', String(dir).slice(0, 500)
-  ], { windowsHide: true, stdio: 'ignore' });
+  ], PS_OPTS);
   return true;
 });
 
@@ -1056,7 +1022,7 @@ ipcMain.handle('ai:openContext', () => {
   const pf = promptFiles[mode] || 'prompt-check.md';
   const parts = ['=== რეჟიმი: ' + mode + ' ===', ''];
   parts.push('=== PROMPT (' + pf + ') ===');
-  try { parts.push(fs.readFileSync(path.join(ROOT, 'core', pf), 'utf8')); }
+  try { parts.push(fs.readFileSync(path.join(CORE_DIR, pf), 'utf8')); }
   catch (e) { parts.push('(ფაილი ვერ მოიძებნა)'); }
   if (mode === 'execute') {
     // No digest file: the brief is assembled from the task card itself and
@@ -1069,13 +1035,13 @@ ipcMain.handle('ai:openContext', () => {
     const dPrefix = (mode === 'ask' || mode === 'ideas') ? 'ask-digest-' : 'check-digest-';
     const digestName = runId ? `${dPrefix}${runId}.json` : 'check-digest.json';
     parts.push('', '=== ' + digestName + ' — ზუსტად ეს მიეწოდა AI-ს ===');
-    try { parts.push(fs.readFileSync(path.join(ROOT, 'core', digestName), 'utf8')); }
+    try { parts.push(fs.readFileSync(path.join(DATA, digestName), 'utf8')); }
     catch (e) { parts.push('(digest ჯერ არ არსებობს)'); }
   } else {
     parts.push('', '=== წყარო ფაილები, რომლებსაც AI კითხულობს ===',
       'GOALS.md · STATE.md · PROGRESS.md · top-dirs.txt · snapshots/ (ბოლო 3 დღე) · briefings/ (ბოლო 1) · kanban.json');
   }
-  const out = path.join(ROOT, 'core', 'last-ai-context.txt');
+  const out = path.join(DATA, 'last-ai-context.txt');
   // BOM on purpose: this file is for the user's text editor.
   fs.writeFileSync(out, '﻿' + parts.join('\r\n'), 'utf8');
   shell.openPath(out);
@@ -1088,7 +1054,7 @@ ipcMain.handle('ai:kill', (ev, runId) => {
   if (!run) return false;
   run.killed = true;
   // Kill the whole tree: powershell -> claude.cmd -> node.
-  spawn('taskkill', ['/PID', String(run.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+  spawn('taskkill', ['/PID', String(run.pid), '/T', '/F'], PS_OPTS);
   return true;
 });
 
@@ -1112,8 +1078,8 @@ function runCheck(taskId, replan, generate, command) {
   if (replan) args.push('-Replan');
   if (generate) args.push('-Generate');
   if (command) args.push('-Command');
-  const logFile = freshLog(path.join(ROOT, 'core', `check-run-${id}.log`));
-  const ps = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
+  const logFile = freshLog(path.join(DATA, `check-run-${id}.log`));
+  const ps = spawn('powershell.exe', args, PS_OPTS);
   const run = {
     id, mode, taskId: taskId || null, pid: ps.pid, startedAt: Date.now(),
     logFile,
@@ -1148,8 +1114,8 @@ function runAsk(mode, dir) {
     '-File', ASK_SCRIPT, '-Mode', mode, '-RunId', id
   ];
   if (dir) args.push('-Dir', String(dir).slice(0, 500));
-  const logFile = freshLog(path.join(ROOT, 'core', `ask-run-${id}.log`));
-  const ps = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
+  const logFile = freshLog(path.join(DATA, `ask-run-${id}.log`));
+  const ps = spawn('powershell.exe', args, PS_OPTS);
   const run = {
     id, mode, taskId: null, pid: ps.pid, startedAt: Date.now(),
     logFile,
@@ -1182,11 +1148,11 @@ function runExecute(taskId) {
   // fighting over the branch) is not a state worth debugging.
   for (const r of activeRuns.values()) if (r.mode === 'execute') return false;
   const runId = crypto.randomUUID().slice(0, 8);
-  const logFile = freshLog(path.join(ROOT, 'core', `execute-run-${runId}.log`));
+  const logFile = freshLog(path.join(DATA, `execute-run-${runId}.log`));
   const ps = spawn('powershell.exe', [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
     '-File', EXECUTE_SCRIPT, '-TaskId', id, '-RunId', runId
-  ], { windowsHide: true, stdio: 'ignore' });
+  ], PS_OPTS);
   const run = {
     id: runId, mode: 'execute', taskId: id, pid: ps.pid, startedAt: Date.now(),
     logFile,
@@ -1369,7 +1335,7 @@ function runMonitor() {
   const ps = spawn('powershell.exe', [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
     '-File', MONITOR_SCRIPT
-  ], { windowsHide: true, stdio: 'ignore' });
+  ], PS_OPTS);
   ps.on('error', () => { monitorRunning = false; });
   ps.on('exit', () => { monitorRunning = false; });
 }
@@ -1390,6 +1356,7 @@ function createWindow() {
       nodeIntegration: false
     }
   });
+  wireZoom(win);
   win.loadFile(PAGE);
 }
 
@@ -1405,8 +1372,8 @@ function runPipeline(force) {
     '-File', PIPELINE, '-NoShow'
   ];
   if (force) args.push('-Force');
-  const logFile = freshLog(path.join(ROOT, 'core', 'last-run.log'));
-  const ps = spawn('powershell.exe', args, { windowsHide: true, stdio: 'ignore' });
+  const logFile = freshLog(path.join(DATA, 'last-run.log'));
+  const ps = spawn('powershell.exe', args, PS_OPTS);
   const run = {
     id, mode, taskId: null, pid: ps.pid, startedAt: Date.now(),
     logFile,
@@ -1533,6 +1500,10 @@ app.whenReady().then(() => {
   createWindow();
   initDb();
   runPipeline();
+  // Prune once at startup and once a day after: run files pile up fastest on
+  // a long-running instance, and deleting them costs nothing.
+  pruneRunFiles();
+  setInterval(pruneRunFiles, 24 * 60 * 60 * 1000);
   // Auto status check for kanban tasks every 5 hours.
   setInterval(() => runCheck('', false, false, false), 5 * 60 * 60 * 1000);
   // Background activity monitor (no AI): on startup and every 30 minutes.
@@ -1557,6 +1528,6 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (db) { try { db.close(); } catch (e) {} }
+  kvClose();
   app.quit();
 });

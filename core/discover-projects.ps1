@@ -11,7 +11,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$base    = 'C:\Users\davit\OneDrive\Desktop\DailyBriefApp\core'
+. (Join-Path $PSScriptRoot 'paths.ps1')   # sets $app (install) and $base (this user's data)
 $outFile = Join-Path $base 'projects.json'
 $utf8    = New-Object System.Text.UTF8Encoding $false
 $now     = Get-Date
