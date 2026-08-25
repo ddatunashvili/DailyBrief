@@ -778,6 +778,7 @@
         <div class="kb-actions">
           <button class="kb-btn" id="kb-check" title="AI შეამოწმებს რა შეიცვალა დირექტორიებში და თითო ტასკს მიუწერს ცვლილებებს">მიმდინარეს შემოწმება</button>
           <button class="kb-btn" id="kb-replan" title="AI სამომავლო გეგმას გადააწყობს შესრულებული/შექმნილი ტასკებისა და სტატუსების მიხედვით">სამომავლო გადაგეგმვა</button>
+          <button class="kb-btn ghost" id="kb-copy-all" title="მთელი დაფა ტექსტად, პროექტების მიხედვით — AI პრომპტისთვის">დაფის კოპირება</button>
           <button class="kb-btn ghost" id="kb-group" title="ბარათებს პროექტების (ფოლდერების) მიხედვით დააჯგუფებს ყოველ სვეტში">პროექტებად დაჯგუფება</button>
           <button class="kb-btn" id="kb-generate" title="AI პროექტების რეესტრიდან (commit-ები, დაუკომიტებელი ფაილები, TODO-ები) შემოგთავაზებს ახალ ტასკებს — ფოლდერით და ჩეკლისტით">ტასკების გენერაცია</button>
         </div>
@@ -1330,6 +1331,19 @@ const BRIEF = {
     return head;
   }
 
+  /* The whole board as one prompt: every task, grouped by project, in the
+     same order the grouped board shows them. */
+  function boardCopyText() {
+    var tasks = (kb.tasks || []).slice().sort(function (a, b) {
+      return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
+    });
+    var out = ["# კანბანი · " + tasks.length + " ტასკი"];
+    groupByProject(tasks).forEach(function (g) {
+      out.push("", "==========", "", projectCopyText(g.name, g.items));
+    });
+    return out.join("\n");
+  }
+
   function renderKanban() {
     boardEl.innerHTML = "";
     KB_COLS.forEach(function (col) {
@@ -1810,6 +1824,13 @@ const BRIEF = {
   var kbCheckBtn = document.getElementById("kb-check");
   var kbReplanBtn = document.getElementById("kb-replan");
   var kbGenerateBtn = document.getElementById("kb-generate");
+
+  var kbCopyAllBtn = document.getElementById("kb-copy-all");
+  var BOARD_COPY_TITLE = "მთელი დაფა ტექსტად, პროექტების მიხედვით — AI პრომპტისთვის";
+  kbCopyAllBtn.addEventListener("click", function () {
+    if (!(kb.tasks || []).length) return;
+    copyTextToClipboard(boardCopyText(), kbCopyAllBtn, BOARD_COPY_TITLE);
+  });
 
   var kbGroupBtn = document.getElementById("kb-group");
   function paintGroupBtn() {
