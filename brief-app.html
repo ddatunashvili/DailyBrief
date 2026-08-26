@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ka">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,7 +8,7 @@
      which is what matters for a page that renders model-written text. -->
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
-<title>დღიური ბრიფინგი</title>
+<title>Daily brief</title>
 <style>
   /* Deliberately single-theme: committed dark design — blue accent on
      blue-grey dark grounds (user's spec), same in app and web. */
@@ -686,19 +686,19 @@
 <body>
 
 <div class="app">
-  <aside class="side" aria-label="ნავიგაცია">
+  <aside class="side" aria-label="Navigation">
     <div class="nav">
-      <button id="nav-brief" class="nav-btn active">ბრიფინგი</button>
-      <button id="nav-kanban" class="nav-btn">კანბანი</button>
-      <button id="nav-projects" class="nav-btn">პროექტები</button>
-      <button id="nav-ask" class="nav-btn">კითხვა</button>
-      <button id="nav-archive" class="nav-btn">არქივი</button>
-      <button id="nav-analytics" class="nav-btn">ანალიტიკა</button>
+      <button id="nav-brief" class="nav-btn active">Brief</button>
+      <button id="nav-kanban" class="nav-btn">Kanban</button>
+      <button id="nav-projects" class="nav-btn">Projects</button>
+      <button id="nav-ask" class="nav-btn">Ask</button>
+      <button id="nav-archive" class="nav-btn">Archive</button>
+      <button id="nav-analytics" class="nav-btn">Analytics</button>
       <button id="nav-ai" class="nav-btn">AI</button>
-      <button id="nav-ignore" class="nav-btn">იგნორი</button>
-      <button id="nav-settings" class="nav-btn">პარამეტრები</button>
+      <button id="nav-ignore" class="nav-btn">Ignored</button>
+      <button id="nav-settings" class="nav-btn">Settings</button>
     </div>
-    <div class="side-head" id="history-head">ისტორია</div>
+    <div class="side-head" id="history-head">History</div>
     <nav id="day-list"></nav>
   </aside>
   <div class="main">
@@ -707,13 +707,13 @@
     <div class="analytics-wrap" id="projects-view" hidden>
       <header>
         <p class="eyebrow">DailyBrief</p>
-        <h1>პროექტები</h1>
-        <p class="an-sub" id="projects-sub">რას მუშაობ სინამდვილეში — commit-ები, დაუკომიტებელი ფაილები, კოდში დარჩენილი TODO-ები</p>
+        <h1>Projects</h1>
+        <p class="an-sub" id="projects-sub">What you are actually working on - commits, uncommitted files, TODOs left in the code</p>
       </header>
       <div class="pj-toolbar">
         <input type="search" id="projects-search" class="pj-search" autocomplete="off" spellcheck="false"
-               placeholder="ძებნა — სახელი, ფოლდერი, სტეკი, აღწერა…">
-        <button class="kb-btn ghost" id="projects-refresh" title="ხელახლა დაასკანერებს სამუშაო ფოლდერებს (AI-ის გარეშე)">განახლება</button>
+               placeholder="Search - name, folder, stack, description…">
+        <button class="kb-btn ghost" id="projects-refresh" title="Rescans the working folders (no AI involved)">Refresh</button>
       </div>
       <div class="pj-hint" id="projects-hint"></div>
       <div id="projects-list"></div>
@@ -721,68 +721,68 @@
     <div class="analytics-wrap" id="ask-view" hidden>
       <header>
         <p class="eyebrow">DailyBrief</p>
-        <h1>კითხვა</h1>
-        <p class="an-sub">ჰკითხე AI-ს შენივე პროექტებზე — პასუხობს რეესტრიდან: commit-ები, დაუკომიტებელი ფაილები, TODO-ები, ღია ტასკები</p>
+        <h1>Ask</h1>
+        <p class="an-sub">Ask the AI about your own projects - it answers from the registry: commits, uncommitted files, TODOs, open tasks</p>
       </header>
       <div class="ask-chips" id="ask-presets"></div>
       <div class="ask-focus" id="ask-focus" hidden></div>
       <div class="ask-focus" id="ask-note" hidden></div>
       <div class="ask-row">
-        <textarea id="ask-input" placeholder="მაგ: რომელი სამი პროექტია ყველაზე ახლოს დასრულებასთან?"></textarea>
-        <button class="kb-btn" id="ask-send">კითხვა</button>
+        <textarea id="ask-input" placeholder="e.g. which three projects are closest to finished?"></textarea>
+        <button class="kb-btn" id="ask-send">Ask</button>
       </div>
       <div style="margin:0.55rem 0 1rem;">
-        <button class="kb-btn ghost" id="ask-clear" title="ჩატის ისტორია იშლება; პროექტების რეესტრს არაფერი ემართება">ისტორიის გასუფთავება</button>
+        <button class="kb-btn ghost" id="ask-clear" title="Clears the chat history; the project registry is untouched">Clear history</button>
       </div>
       <div class="ask-thread" id="ask-thread"></div>
     </div>
     <div class="analytics-wrap" id="ignore-view" hidden>
       <header>
         <p class="eyebrow">DailyBrief</p>
-        <h1>იგნორირებული ფოლდერები</h1>
-        <p class="an-sub">დამატებული ფოლდერი და მისი ქვეფოლდერები აღარ ითვლება: არც ანალიტიკაში, არც პროექტებში, არც AI-ის კონტექსტში</p>
+        <h1>Ignored folders</h1>
+        <p class="an-sub">A folder added here, and everything under it, stops counting: not in analytics, not in projects, not in the AI context</p>
       </header>
       <section class="an-section">
-        <h2>ძებნა და დამატება</h2>
-        <input class="ig-search" id="ig-search" placeholder="ფოლდერის სახელი ან გზა — მაგ: backups" />
+        <h2>Search and add</h2>
+        <input class="ig-search" id="ig-search" placeholder="Folder name or path - e.g. backups" />
         <div style="margin-top:0.5rem;">
-          <button class="kb-btn ghost" id="ig-pick">ფოლდერის არჩევა…</button>
+          <button class="kb-btn ghost" id="ig-pick">Pick a folder…</button>
         </div>
         <div id="ig-results" style="margin-top:0.6rem;"></div>
       </section>
       <section class="an-section">
-        <h2>იგნორირებულია (<span id="ig-count">0</span>)</h2>
+        <h2>Ignored (<span id="ig-count">0</span>)</h2>
         <div id="ig-list"></div>
       </section>
     </div>
     <div class="analytics-wrap" id="settings-view" hidden>
       <header>
         <p class="eyebrow">DailyBrief</p>
-        <h1>პარამეტრები</h1>
+        <h1>Settings</h1>
         <p class="an-sub" id="settings-sub"></p>
       </header>
       <section class="an-section">
-        <h2>განახლება</h2>
+        <h2>Updates</h2>
         <div id="update-box"></div>
       </section>
       <section class="an-section">
-        <h2>ზუმი</h2>
+        <h2>Zoom</h2>
         <div id="zoom-box"></div>
       </section>
       <section class="an-section">
-        <h2>ავტომატიზაცია</h2>
+        <h2>Automation</h2>
         <div id="settings-toggles"></div>
       </section>
     </div>
     <div class="kanban-wrap" id="kanban-view" hidden>
       <div class="kb-head">
-        <h1>კანბანი</h1>
+        <h1>Kanban</h1>
         <div class="kb-actions">
-          <button class="kb-btn" id="kb-check" title="AI შეამოწმებს რა შეიცვალა დირექტორიებში და თითო ტასკს მიუწერს ცვლილებებს">მიმდინარეს შემოწმება</button>
-          <button class="kb-btn" id="kb-replan" title="AI სამომავლო გეგმას გადააწყობს შესრულებული/შექმნილი ტასკებისა და სტატუსების მიხედვით">სამომავლო გადაგეგმვა</button>
-          <button class="kb-btn ghost" id="kb-copy-all" title="მთელი დაფა ტექსტად, პროექტების მიხედვით — AI პრომპტისთვის">დაფის კოპირება</button>
-          <button class="kb-btn ghost" id="kb-group" title="ბარათებს პროექტების (ფოლდერების) მიხედვით დააჯგუფებს ყოველ სვეტში">პროექტებად დაჯგუფება</button>
-          <button class="kb-btn" id="kb-generate" title="AI პროექტების რეესტრიდან (commit-ები, დაუკომიტებელი ფაილები, TODO-ები) შემოგთავაზებს ახალ ტასკებს — ფოლდერით და ჩეკლისტით">ტასკების გენერაცია</button>
+          <button class="kb-btn" id="kb-check" title="The AI checks what changed in the folders and notes it on each task">Check current</button>
+          <button class="kb-btn" id="kb-replan" title="The AI rearranges the plan ahead around finished and new tasks and their statuses">Re-plan ahead</button>
+          <button class="kb-btn ghost" id="kb-copy-all" title="The whole board as text, grouped by project - for an AI prompt">Copy board</button>
+          <button class="kb-btn ghost" id="kb-group" title="Groups the cards by project (folder) inside every column">Group by project</button>
+          <button class="kb-btn" id="kb-generate" title="From the project registry (commits, uncommitted files, TODOs) the AI proposes new tasks - with a folder and a checklist">Generate tasks</button>
         </div>
       </div>
       <div class="board" id="board"></div>
@@ -790,7 +790,7 @@
     <div class="wrap" id="archive-view" hidden>
       <header>
         <p class="eyebrow">DailyBrief</p>
-        <h1>არქივი</h1>
+        <h1>Archive</h1>
         <p class="date" id="archive-count"></p>
       </header>
       <div class="arch-list" id="archive-list"></div>
@@ -798,50 +798,50 @@
     <div class="analytics-wrap" id="analytics-view" hidden>
       <header>
         <p class="eyebrow">DailyBrief</p>
-        <h1>ანალიტიკა</h1>
-        <p class="an-sub">ბოლო 7 დღე · ფონური მონიტორინგი ყოველ 30 წუთში, AI-ის გარეშე</p>
+        <h1>Analytics</h1>
+        <p class="an-sub">Last 7 days - background monitoring every 30 minutes, no AI involved</p>
       </header>
       <div class="an-tiles" id="an-tiles"></div>
       <section class="an-section">
-        <h2>პროექტების აქტივობა კვირაში</h2>
+        <h2>Project activity this week</h2>
         <div id="an-projects"></div>
       </section>
       <section class="an-section">
-        <h2>აქტიური საათები</h2>
+        <h2>Active hours</h2>
         <div id="an-hours"></div>
       </section>
       <section class="an-section">
-        <h2>დღეების დატვირთვა</h2>
+        <h2>Load by day</h2>
         <div id="an-days"></div>
       </section>
       <section class="an-section">
-        <h2>ხშირად შეცვლილი ფაილები</h2>
+        <h2>Most changed files</h2>
         <div id="an-files"></div>
       </section>
     </div>
     <div class="analytics-wrap" id="ai-view" hidden>
       <header>
         <p class="eyebrow">DailyBrief</p>
-        <h1>AI — მოხმარება და პროცესები</h1>
-        <p class="an-sub">გაშვებების ისტორია, ტოკენები და ღირებულება; მიმდინარე პროცესის გათიშვა</p>
+        <h1>AI - usage and runs</h1>
+        <p class="an-sub">Run history, tokens and cost; stopping a run in progress</p>
       </header>
       <section class="an-section">
-        <h2>მიმდინარე პროცესი</h2>
+        <h2>Running now</h2>
         <div id="ai-current"></div>
         <div style="margin-top:0.7rem;">
-          <button class="kb-btn ghost" id="ai-context-btn" title="ბოლო გაშვების prompt + digest გაიხსნება ტექსტურ ფაილად">კონტექსტის ნახვა (TXT)</button>
+          <button class="kb-btn ghost" id="ai-context-btn" title="Opens the last run prompt + digest as a text file">View context (TXT)</button>
         </div>
       </section>
       <div class="an-tiles" id="ai-tiles"></div>
       <section class="an-section">
-        <h2>ხარვეზები და დაყოვნებები</h2>
+        <h2>Problems and delays</h2>
         <div id="ai-problems"></div>
         <div style="margin-top:0.7rem;">
-          <button class="kb-btn ghost" id="ai-diag-btn" title="ბოლო ხარვეზები + ლოგები ერთ ტექსტურ ფაილში — გასაგზავნად">დიაგნოსტიკის ფაილი (TXT)</button>
+          <button class="kb-btn ghost" id="ai-diag-btn" title="The latest problems plus logs in one text file - ready to send">Diagnostics file (TXT)</button>
         </div>
       </section>
       <section class="an-section">
-        <h2>გაშვებების ისტორია</h2>
+        <h2>Run history</h2>
         <div id="ai-runs"></div>
       </section>
     </div>
@@ -850,26 +850,26 @@
 
 <script>
 /*
-  ქვემოთ მოცემული BRIEF მხოლოდ ცარიელი ნიმუშია — მაშინ ჩანს, როცა აპის
-  IPC მიუწვდომელია (ბრაუზერი/ვებ-ასლი) ან ჯერ ერთი ბრიფიც არ დაწერილა.
-  რეალური მონაცემი ყოველთვის იკითხება მომხმარებლის data-საქაღალდიდან
-  (briefs\<date>.json) api.loadDay()-ით; ამ ფაილში pipeline აღარაფერს წერს —
-  ის დაინსტალირებული პროგრამის ნაწილია და ყველა მომხმარებელს აქვს საერთო.
+  The BRIEF below is an empty sample only - it shows when the app's IPC is
+  out of reach (a browser or the web copy) or no brief has been written yet.
+  The real data is always read from the user's own data folder
+  (briefs\<date>.json) via api.loadDay(); the pipeline no longer writes into
+  this file - it is part of the installed program, shared by every user.
 
-  ველები:
-    date        — "YYYY-MM-DD" (მონიშვნების გასაღები — ყოველ დღეს ახალი)
-    dateLabel   — სათაურის ქვეშ საჩვენებელი ტექსტი
-    tldr        — შეჯამება; **მუქი** და `კოდი` მუშაობს
-    tasks[]     — {id, title, desc, weight (0-100, დროის წილი), badge (ჩიპის ტექსტი)}
-    warnings[]  — {sev: "crit"|"warn"|"note", label, text}
-    recap[]     — ტექსტების სია
-    assessment[] — აბზაცების სია; პირველი ჩვეულებრივი, დანარჩენი მკრთალი
+  Fields:
+    date        - "YYYY-MM-DD" (the key for ticks - a new one each day)
+    dateLabel   - the text shown under the title
+    tldr        - the summary; **bold** and `code` work
+    tasks[]     - {id, title, desc, weight (0-100, share of the day), badge (chip text)}
+    warnings[]  - {sev: "crit"|"warn"|"note", label, text}
+    recap[]     - a list of texts
+    assessment[] - a list of paragraphs; the first plain, the rest dimmed
 */
 /*BRIEF-DATA-START*/
 const BRIEF = {
   "date": "",
-  "dateLabel": "დღიური ბრიფინგი",
-  "tldr": "დღევანდელი ბრიფი ჯერ არ არის. აპი დღის გეგმას ფონურად ამზადებს — ცოტა ხანში განახლდება.",
+  "dateLabel": "Daily brief",
+  "tldr": "No brief for today yet. The app is preparing the day's plan in the background - this will refresh shortly.",
   "tasks": [],
   "warnings": [],
   "recap": [],
@@ -924,17 +924,17 @@ const BRIEF = {
     header.style.display = "flex";
     header.style.flexDirection = "column";
     header.appendChild(el("p", "eyebrow", "DailyBrief"));
-    header.appendChild(el("h1", null, "დღიური ბრიფინგი"));
+    header.appendChild(el("h1", null, "Daily brief"));
     header.appendChild(el("p", "date", md(brief.dateLabel || brief.date)));
     if (opts && opts.canReplan) {
-      var replanBtn = el("button", "replan-btn", "დღის გადაგეგმვა");
-      replanBtn.title = "Claude დღევანდელ გეგმას თავიდან შეადგენს — მონიშნული ამოცანები ამოვარდება, დარჩენილი ახლიდან დაიგეგმება";
+      var replanBtn = el("button", "replan-btn", "Re-plan the day");
+      replanBtn.title = "Claude rebuilds today's plan - ticked tasks drop out, the rest is planned afresh";
       replanBtn.addEventListener("click", async function () {
-        if (!confirm("დღევანდელი გეგმა თავიდან დაიგეგმება: შესრულებულად მონიშნული ამოცანები ამოვარდება, დარჩენილი ახლიდან გადანაწილდება. ამას რამდენიმე წუთი სჭირდება. გავაგრძელო?")) return;
+        if (!confirm("Today's plan will be rebuilt: tasks ticked as done drop out, the rest is spread over the remaining time. This takes a few minutes. Continue?")) return;
         replanBtn.disabled = true;
-        replanBtn.textContent = "იგეგმება… ფანჯარა თავად განახლდება";
+        replanBtn.textContent = "Planning… the window refreshes itself";
         var ok = await api.replan();
-        if (!ok) replanBtn.textContent = "დაგეგმვა უკვე მიმდინარეობს…";
+        if (!ok) replanBtn.textContent = "Planning is already running…";
       });
       header.appendChild(replanBtn);
     }
@@ -945,7 +945,7 @@ const BRIEF = {
     /* warnings */
     if (brief.warnings && brief.warnings.length) {
       var warnSection = el("section");
-      warnSection.appendChild(el("h2", null, "გაფრთხილებები"));
+      warnSection.appendChild(el("h2", null, "Warnings"));
       var warns = el("div", "warns");
       brief.warnings.forEach(function (w) {
         var cls = "warn-card" + (w.sev === "crit" ? " crit" : w.sev === "note" ? " note" : "");
@@ -959,7 +959,7 @@ const BRIEF = {
     /* recap */
     if (brief.recap && brief.recap.length) {
       var recapSection = el("section");
-      recapSection.appendChild(el("h2", null, "რას აკეთებდი"));
+      recapSection.appendChild(el("h2", null, "What you have been doing"));
       var card = el("div", "card");
       var ul = el("ul");
       brief.recap.forEach(function (r) { ul.appendChild(el("li", null, md(r))); });
@@ -971,7 +971,7 @@ const BRIEF = {
     /* assessment */
     if (brief.assessment && brief.assessment.length) {
       var aSection = el("section");
-      aSection.appendChild(el("h2", null, "გზა სწორია?"));
+      aSection.appendChild(el("h2", null, "Is this the right road?"));
       var aCard = el("div", "card");
       brief.assessment.forEach(function (a, i) {
         aCard.appendChild(el("p", i > 0 ? "dim" : null, md(a)));
@@ -986,9 +986,9 @@ const BRIEF = {
   function renderLegacy(date, text) {
     content.innerHTML = "";
     var header = el("header");
-    header.appendChild(el("p", "eyebrow", "DailyBrief · არქივი"));
-    header.appendChild(el("h1", null, "ბრიფინგი — " + date));
-    header.appendChild(el("p", "date", "ძველი ფორმატი (markdown), მხოლოდ საკითხავი"));
+    header.appendChild(el("p", "eyebrow", "DailyBrief - archive"));
+    header.appendChild(el("h1", null, "Brief - " + date));
+    header.appendChild(el("p", "date", "Old format (markdown), read-only"));
     content.appendChild(header);
 
     var card = el("div", "card");
@@ -1025,9 +1025,9 @@ const BRIEF = {
   }
 
   function dayLabel(dateStr) {
-    if (dateStr === todayISO()) return "დღეს";
+    if (dateStr === todayISO()) return "Today";
     try {
-      return new Date(dateStr + "T00:00:00").toLocaleDateString("ka-GE", { weekday: "long" });
+      return new Date(dateStr + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long" });
     } catch (e) { return ""; }
   }
 
@@ -1036,7 +1036,7 @@ const BRIEF = {
       b.classList.toggle("active", b === btn);
     });
     var data = await api.loadDay(day.date);
-    if (!data) { renderError("ფაილი ვერ მოიძებნა: " + day.date); return; }
+    if (!data) { renderError("File not found: " + day.date); return; }
     if (data.kind === "error") { renderError(data.message); return; }
     if (data.kind === "md") { renderLegacy(day.date, data.text); return; }
     renderBrief(data.brief, { canReplan: day.date === todayISO() });
@@ -1051,7 +1051,7 @@ const BRIEF = {
     days.forEach(function (day, i) {
       var btn = el("button", "day-btn",
         '<div class="day-date">' + md(day.date) + '</div>' +
-        '<div class="day-sub">' + md(dayLabel(day.date)) + (day.kind === "md" ? " · არქივი" : "") + '</div>');
+        '<div class="day-sub">' + md(dayLabel(day.date)) + (day.kind === "md" ? " - archive" : "") + '</div>');
       btn.addEventListener("click", function () { selectDay(day, btn); });
       dayList.appendChild(btn);
       if (i === 0) selectDay(day, btn);
@@ -1061,12 +1061,12 @@ const BRIEF = {
   /* ---- kanban board ---- */
 
   var KB_COLS = [
-    { key: "urgent", label: "სასწრაფო", cls: "st-urgent" },
-    { key: "important", label: "მნიშვნელოვანი", cls: "st-important" },
-    { key: "planning", label: "დასაგეგმი", cls: "st-planning" },
-    { key: "delayed", label: "გადადებული", cls: "st-delayed" },
-    { key: "active", label: "მიმდინარე", cls: "st-active" },
-    { key: "done", label: "დასრულებული", cls: "st-done" }
+    { key: "urgent", label: "Urgent", cls: "st-urgent" },
+    { key: "important", label: "Important", cls: "st-important" },
+    { key: "planning", label: "To plan", cls: "st-planning" },
+    { key: "delayed", label: "Delayed", cls: "st-delayed" },
+    { key: "active", label: "In progress", cls: "st-active" },
+    { key: "done", label: "Done", cls: "st-done" }
   ];
 
   var kanbanStore = api
@@ -1149,7 +1149,7 @@ const BRIEF = {
     return i >= 0 ? s.slice(i + 1) : s;
   }
 
-  var NO_PROJECT = "პროექტის გარეშე";
+  var NO_PROJECT = "No project";
 
   // Attribute-safe: md() leaves quotes and backticks alone, which is fine in
   // text but not inside a title="…".
@@ -1176,21 +1176,21 @@ const BRIEF = {
     var col = KB_COLS.filter(function (c) { return c.key === (t.done ? "done" : (t.status || "planning")); })[0];
     var lines = [];
     lines.push("# " + String(t.title || ""));
-    lines.push("სტატუსი: " + ((col && col.label) || "") + (t.done ? " (დასრულებული)" : ""));
-    lines.push("პროგრესი: " + pr.pct + "%" + (pr.total ? " (" + pr.done + "/" + pr.total + " ქვეტასკი)" : ""));
+    lines.push("Status: " + ((col && col.label) || "") + (t.done ? " (done)" : ""));
+    lines.push("Progress: " + pr.pct + "%" + (pr.total ? " (" + pr.done + "/" + pr.total + " subtasks)" : ""));
     if ((t.dirs || []).length) {
       lines.push("");
-      lines.push("ფოლდერები:");
+      lines.push("Folders:");
       t.dirs.forEach(function (d) { lines.push("- " + d); });
     }
     if (t.desc) {
       lines.push("");
-      lines.push("აღწერა:");
+      lines.push("Description:");
       lines.push(String(t.desc));
     }
     if ((t.subtasks || []).length) {
       lines.push("");
-      lines.push("ქვეტასკები:");
+      lines.push("Subtasks:");
       t.subtasks.forEach(function (st) {
         lines.push("- [" + (st.done || t.done ? "x" : " ") + "] " + String(st.text || ""));
       });
@@ -1201,13 +1201,13 @@ const BRIEF = {
   /* A whole project as one prompt: every task of that folder, in order,
      separated so a model can tell them apart. */
   function projectCopyText(name, tasks) {
-    var lines = ["# პროექტი: " + String(name)];
+    var lines = ["# Project: " + String(name)];
     var dirs = [];
     tasks.forEach(function (t) {
       (t.dirs || []).forEach(function (d) { if (dirs.indexOf(d) < 0) dirs.push(d); });
     });
-    if (dirs.length) lines.push("ფოლდერი: " + dirs.join(", "));
-    lines.push("ტასკები: " + tasks.length);
+    if (dirs.length) lines.push("Folder: " + dirs.join(", "));
+    lines.push("Tasks: " + tasks.length);
     lines.push("");
     tasks.forEach(function (t, i) {
       if (i) lines.push("", "---", "");
@@ -1216,17 +1216,17 @@ const BRIEF = {
     return lines.join("\n");
   }
 
-  var PROJ_COPY_TITLE = "პროექტის ყველა ტასკის კოპირება (AI პრომპტისთვის)";
+  var PROJ_COPY_TITLE = "Copy every task of this project (for an AI prompt)";
 
   function copyTaskToClipboard(t, btn) {
-    copyTextToClipboard(taskCopyText(t), btn, "ტასკის კოპირება (AI პრომპტისთვის)");
+    copyTextToClipboard(taskCopyText(t), btn, "Copy this task (for an AI prompt)");
   }
 
   function copyTextToClipboard(text, btn, restoreTitle) {
     function done(ok) {
       if (!btn) return;
       btn.classList.toggle("ok", ok);
-      btn.title = ok ? "დაკოპირდა" : "კოპირება ვერ მოხერხდა";
+      btn.title = ok ? "Copied" : "Copying failed";
       setTimeout(function () {
         btn.classList.remove("ok");
         btn.title = restoreTitle;
@@ -1273,7 +1273,7 @@ const BRIEF = {
       (badges.length ? '<div class="kb-badges">' + badges.join("") + '</div>' : ''));
     if ((t.subtasks || []).length || t.done) card.appendChild(progressBar(t));
     var copyBtn = el("button", "kb-copy", icon("copy"));
-    copyBtn.title = "ტასკის კოპირება (AI პრომპტისთვის)";
+    copyBtn.title = "Copy this task (for an AI prompt)";
     copyBtn.addEventListener("click", function (e) {
       e.stopPropagation();
       copyTaskToClipboard(t, copyBtn);
@@ -1325,7 +1325,7 @@ const BRIEF = {
       // Done cards have nothing left to check, so that column gets no button.
       if (api && api.kanbanCheckTasks && col && col.key !== "done") {
         var ids = g.items.map(function (t) { return t.id; });
-        var checkTitle = "ამ სვეტში ამ პროექტის ტასკების შემოწმება · " + ids.length;
+        var checkTitle = "Check this project's tasks in this column - " + ids.length;
         var check = el("button", "kb-group-check", icon("activity"));
         check.title = checkTitle;
         check.addEventListener("click", async function (e) {
@@ -1333,7 +1333,7 @@ const BRIEF = {
           check.disabled = true;
           var started = await api.kanbanCheckTasks(ids);
           check.classList.toggle("ok", started);
-          check.title = started ? "მოწმდება… (1-2 წთ)" : "ბევრი პროცესია გაშვებული…";
+          check.title = started ? "Checking… (1-2 min)" : "Too many runs in progress…";
           setTimeout(function () {
             check.disabled = false;
             check.classList.remove("ok");
@@ -1363,7 +1363,7 @@ const BRIEF = {
     var tasks = (kb.tasks || []).slice().sort(function (a, b) {
       return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
     });
-    var out = ["# კანბანი · " + tasks.length + " ტასკი"];
+    var out = ["# Kanban - " + tasks.length + " tasks"];
     groupByProject(tasks).forEach(function (g) {
       out.push("", "==========", "", projectCopyText(g.name, g.items));
     });
@@ -1395,12 +1395,12 @@ const BRIEF = {
       colEl.appendChild(cards);
 
       if (col.key !== "done") {
-        var addBtn = el("button", "kb-addcard", icon("plus") + "ბარათის დამატება");
+        var addBtn = el("button", "kb-addcard", icon("plus") + "Add a card");
         addBtn.addEventListener("click", function () {
           if (colEl.querySelector(".kb-add-input")) return;
           var inp = document.createElement("textarea");
           inp.className = "kb-add-input";
-          inp.placeholder = "სათაური… (Enter — შენახვა)";
+          inp.placeholder = "Title… (Enter to save)";
           inp.rows = 2;
           inp.maxLength = 300;
           cards.appendChild(inp);
@@ -1443,7 +1443,7 @@ const BRIEF = {
           var info = await api.dirInfo(p);
           if (!info) return;
           // Never create silently — the user confirms first.
-          if (!confirm("შეიქმნას ტასკი ფოლდერისთვის: " + info.name + "?")) return;
+          if (!confirm("Create a task for the folder: " + info.name + "?")) return;
           var nt = {
             id: newTaskId(), title: info.name, desc: "",
             status: col.key === "done" ? "planning" : col.key, done: false,
@@ -1517,9 +1517,9 @@ const BRIEF = {
     });
     meta.appendChild(sel);
     meta.appendChild(el("span", "kb-m-by",
-      (t.createdBy === "ai" ? "შექმნა AI-მ" : "შენ შექმენი") + " · " + md(shortAt(t.createdAt))));
-    var mCopy = el("button", "kb-copy-btn", icon("copy") + "კოპირება");
-    mCopy.title = "სათაური, ფოლდერები, აღწერა და ჩეკლისტი — ტექსტად, AI პრომპტისთვის";
+      (t.createdBy === "ai" ? "Created by the AI" : "Created by you") + " · " + md(shortAt(t.createdAt))));
+    var mCopy = el("button", "kb-copy-btn", icon("copy") + "Copy");
+    mCopy.title = "Title, folders, description and checklist - as text, for an AI prompt";
     mCopy.addEventListener("click", function () { copyTaskToClipboard(t, mCopy); });
     meta.appendChild(mCopy);
     m.appendChild(meta);
@@ -1532,11 +1532,11 @@ const BRIEF = {
     paintProg();
     m.appendChild(progWrap);
 
-    m.appendChild(el("div", "kb-m-h", "აღწერა"));
+    m.appendChild(el("div", "kb-m-h", "Description"));
     var desc = document.createElement("textarea");
     desc.className = "kb-m-desc";
     desc.value = t.desc || "";
-    desc.placeholder = "დაამატე აღწერა…";
+    desc.placeholder = "Add a description…";
     desc.maxLength = 2000;
     desc.addEventListener("change", function () {
       t.desc = desc.value.trim();
@@ -1546,7 +1546,7 @@ const BRIEF = {
     m.appendChild(desc);
 
     /* subtasks checklist — separate from the free-text description */
-    m.appendChild(el("div", "kb-m-h", "ქვეტასკები"));
+    m.appendChild(el("div", "kb-m-h", "Subtasks"));
     var stBox = el("div", "kb-subtasks");
     function paintSubtasks() {
       stBox.innerHTML = "";
@@ -1554,7 +1554,7 @@ const BRIEF = {
         var row = el("div", "kb-st-row" + (s.done ? " done" : ""),
           '<input type="checkbox"' + (s.done ? " checked" : "") + '>' +
           '<span class="kb-st-text">' + md(s.text) + '</span>' +
-          '<button class="kb-dir-del" title="წაშლა">' + icon("x") + '</button>');
+          '<button class="kb-dir-del" title="Delete">' + icon("x") + '</button>');
         row.querySelector("input").addEventListener("change", function (ev) {
           t.subtasks[idx].done = ev.target.checked;
           t.updatedAt = nowISO();
@@ -1568,7 +1568,7 @@ const BRIEF = {
         stBox.appendChild(row);
       });
       var addRow = el("div", "kb-cin",
-        '<input type="text" placeholder="ახალი ქვეტასკი… (Enter)" maxlength="300"><button>' + icon("plus") + '</button>');
+        '<input type="text" placeholder="New subtask… (Enter)" maxlength="300"><button>' + icon("plus") + '</button>');
       var addIn = addRow.querySelector("input");
       function addSub() {
         var txt = addIn.value.trim();
@@ -1584,7 +1584,7 @@ const BRIEF = {
       stBox.appendChild(addRow);
       // A task opened without a plan gets one automatically — see ensurePlan.
       if (!(t.subtasks || []).length && t.planRequested) {
-        stBox.insertBefore(el("div", "kb-st-row", '<span class="kb-st-text">AI ადგენს ჩეკლისტს… ფანჯარა თავად განახლდება</span>'), stBox.firstChild);
+        stBox.insertBefore(el("div", "kb-st-row", '<span class="kb-st-text">The AI is drawing up the checklist… the window refreshes itself</span>'), stBox.firstChild);
       }
     }
     paintSubtasks();
@@ -1599,14 +1599,14 @@ const BRIEF = {
     }
 
     /* linked folders: the AI check watches these paths first */
-    m.appendChild(el("div", "kb-m-h", "დაკავშირებული ფოლდერები — AI ამ გზებს დააკვირდება"));
+    m.appendChild(el("div", "kb-m-h", "Linked folders - the AI watches these paths"));
     var dirsBox = el("div", "kb-m-dirs");
     function paintDirs() {
       dirsBox.innerHTML = "";
       (t.dirs || []).forEach(function (d) {
         var row = el("div", "kb-dir-row",
           '<span class="kb-dir-path" title="' + md(d) + '">' + md(d) + '</span>' +
-          '<button class="kb-dir-del" title="მოხსნა">' + icon("x") + '</button>');
+          '<button class="kb-dir-del" title="Unlink">' + icon("x") + '</button>');
         row.querySelector(".kb-dir-del").addEventListener("click", function () {
           t.dirs = (t.dirs || []).filter(function (x) { return x !== d; });
           t.updatedAt = nowISO();
@@ -1615,13 +1615,13 @@ const BRIEF = {
         dirsBox.appendChild(row);
       });
       if (!(t.dirs || []).length) {
-        dirsBox.appendChild(el("div", "kb-dir-empty", "ფოლდერი მიბმული არ არის."));
+        dirsBox.appendChild(el("div", "kb-dir-empty", "No folder linked."));
       }
     }
     paintDirs();
     m.appendChild(dirsBox);
     if (api && api.pickFolder) {
-      var addDirBtn = el("button", "kb-btn ghost kb-dir-add", icon("plus") + "ფოლდერის მიბმა");
+      var addDirBtn = el("button", "kb-btn ghost kb-dir-add", icon("plus") + "Link a folder");
       addDirBtn.addEventListener("click", async function () {
         var p = await api.pickFolder();
         if (!p) return;
@@ -1637,7 +1637,7 @@ const BRIEF = {
     }
 
     if ((t.aiNotes || []).length) {
-      m.appendChild(el("div", "kb-m-h", "AI — რა შეიცვალა"));
+      m.appendChild(el("div", "kb-m-h", "AI - what changed"));
       var aiBox = el("div", "kb-m-ai");
       t.aiNotes.slice().reverse().forEach(function (n) {
         aiBox.appendChild(el("div", null, md(n.text) + ' <span class="at">' + md(shortAt(n.at)) + '</span>'));
@@ -1645,20 +1645,20 @@ const BRIEF = {
       m.appendChild(aiBox);
     }
 
-    m.appendChild(el("div", "kb-m-h", "კომენტარები"));
+    m.appendChild(el("div", "kb-m-h", "Comments"));
     var cbox = el("div", "kb-m-comments");
     (t.comments || []).forEach(function (c) {
       // A user comment is an order: it stays marked "pending" until the AI run
       // it triggered has rewritten the task.
       var pending = c.by === "user" && c.state === "new";
       cbox.appendChild(el("div", "kb-comment",
-        '<span class="by">' + (c.by === "ai" ? "AI" : "შენ") + '</span>' + md(c.text) +
+        '<span class="by">' + (c.by === "ai" ? "AI" : "You") + '</span>' + md(c.text) +
         ' <span class="at">' + md(shortAt(c.at)) + '</span>' +
-        (pending ? ' <span class="at">· AI ასრულებს…</span>' : "")));
+        (pending ? ' <span class="at">- the AI is working on it…</span>' : "")));
     });
     m.appendChild(cbox);
     var cin = el("div", "kb-cin",
-      '<input type="text" placeholder="დაწერე ბრძანება: „უკეთესად დაგეგმე“, „ეს გაკეთდა“…" maxlength="1000"><button>დამატება</button>');
+      '<input type="text" placeholder="Write an order: &quot;plan it better&quot;, &quot;this is done&quot;…" maxlength="1000"><button>Add</button>');
     var cIn = cin.querySelector("input");
     function addComment() {
       var txt = cIn.value.trim();
@@ -1675,42 +1675,42 @@ const BRIEF = {
 
     var foot = el("div", "kb-m-foot");
     if (api && !t.done) {
-      var tCheckBtn = el("button", "kb-btn", icon("search") + "ამ ტასკის შემოწმება");
-      tCheckBtn.title = "AI შეამოწმებს მხოლოდ ამ ტასკს — რა შეიცვალა მის ფოლდერებში/თემაზე";
+      var tCheckBtn = el("button", "kb-btn", icon("search") + "Check this task");
+      tCheckBtn.title = "The AI checks this task alone - what changed in its folders and its subject";
       tCheckBtn.addEventListener("click", async function () {
         tCheckBtn.disabled = true;
-        tCheckBtn.textContent = "მოწმდება…";
+        tCheckBtn.textContent = "Checking…";
         var ok = await api.taskCheck(t.id);
-        if (!ok) tCheckBtn.textContent = "პროცესი უკვე მიმდინარეობს…";
+        if (!ok) tCheckBtn.textContent = "A run is already in progress…";
       });
       foot.appendChild(tCheckBtn);
-      var tReplanBtn = el("button", "kb-btn", icon("replan") + "ტასკის გადაგეგმვა");
-      tReplanBtn.title = "AI ამ ტასკს გადაგეგმავს: კონკრეტული ნაბიჯები აღწერაში, საჭიროებისას სტატუსი/დაშლა";
+      var tReplanBtn = el("button", "kb-btn", icon("replan") + "Re-plan the task");
+      tReplanBtn.title = "The AI re-plans this task: concrete steps in the description, a new status or a split if needed";
       tReplanBtn.addEventListener("click", async function () {
         tReplanBtn.disabled = true;
-        tReplanBtn.textContent = "იგეგმება…";
+        tReplanBtn.textContent = "Planning…";
         var ok = await api.taskReplan(t.id);
-        if (!ok) tReplanBtn.textContent = "პროცესი უკვე მიმდინარეობს…";
+        if (!ok) tReplanBtn.textContent = "A run is already in progress…";
       });
       foot.appendChild(tReplanBtn);
       // The only button that changes code instead of the board. Needs a
       // linked folder — without one the script has nowhere to work.
       var tExecBtn = null;
       if (api.taskExecute && (t.dirs || []).length) {
-        tExecBtn = el("button", "kb-btn", icon("play") + "შესრულება (VS Code)");
-        tExecBtn.title = "AI ამ ტასკს ნამდვილად შეასრულებს " + (t.dirs[0] || "") +
-          "-ში: გადავა თავის branch-ზე dailybrief/" + t.id + ", გახსნის VS Code-ს და დაწერს კოდს. commit არ კეთდება.";
+        tExecBtn = el("button", "kb-btn", icon("play") + "Carry out (VS Code)");
+        tExecBtn.title = "The AI really carries this task out in " + (t.dirs[0] || "") +
+          ": it moves to its own branch dailybrief/" + t.id + ", opens VS Code and writes code. It never commits.";
         tExecBtn.addEventListener("click", async function () {
-          if (!confirm("AI ნამდვილად შეასრულებს ამ ტასკს ფოლდერში:\n" + t.dirs[0] +
-            "\n\n· გადავა ცალკე branch-ზე: dailybrief/" + t.id +
-            "\n· გახსნის VS Code-ს — ცვლილებებს Source Control-ში ნახავ" +
-            "\n· commit-ს არ გააკეთებს — diff შენთვის დარჩება" +
-            "\n· ერთი გაშვება ჯდება დაახლოებით $1-3 და გრძელდება 10-15 წუთი" +
-            "\n\nუკან დასაბრუნებლად: git checkout " + "-" + "\n\nგავუშვა?")) return;
+          if (!confirm("The AI will really carry this task out in the folder:\n" + t.dirs[0] +
+            "\n\n- it moves to a separate branch: dailybrief/" + t.id +
+            "\n- it opens VS Code - you read the changes in Source Control" +
+            "\n- it never commits - the diff is left for you" +
+            "\n- one run costs roughly $1-3 and takes 10-15 minutes" +
+            "\n\nTo undo everything: git checkout " + "-" + "\n\nRun it?")) return;
           tExecBtn.disabled = true;
-          tExecBtn.textContent = "სრულდება…";
+          tExecBtn.textContent = "Working…";
           var ok = await api.taskExecute(t.id);
-          if (!ok) tExecBtn.textContent = "სხვა შესრულება მიმდინარეობს…";
+          if (!ok) tExecBtn.textContent = "Another run is in progress…";
         });
         foot.appendChild(tExecBtn);
       }
@@ -1721,32 +1721,32 @@ const BRIEF = {
       if (runningForTask.length) {
         tCheckBtn.disabled = true;
         tReplanBtn.disabled = true;
-        var busyLabel = modeLabel(runningForTask[0].mode) + " მიმდინარეობს…";
+        var busyLabel = modeLabel(runningForTask[0].mode) + " in progress…";
         tCheckBtn.textContent = tReplanBtn.textContent = busyLabel;
         if (tExecBtn) { tExecBtn.disabled = true; tExecBtn.textContent = busyLabel; }
       }
     }
-    var doneBtn = el("button", "kb-btn", t.done ? icon("restore") + "დაბრუნება დაფაზე" : icon("check") + "დასრულების დადასტურება");
+    var doneBtn = el("button", "kb-btn", t.done ? icon("restore") + "Put back on the board" : icon("check") + "Confirm it is done");
     doneBtn.addEventListener("click", function () {
       if (t.done) { t.done = false; t.status = "planning"; }
       else { t.done = true; }
       t.updatedAt = nowISO();
       saveKb(); renderKanban(); closeModal();
     });
-    var delBtn = el("button", "kb-btn ghost", icon("x") + "არქივში");
+    var delBtn = el("button", "kb-btn ghost", icon("x") + "Archive");
     delBtn.addEventListener("click", function () {
       kb.tasks = kb.tasks.filter(function (x) { return x.id !== t.id; });
       t.archivedAt = nowISO();
       kb.archive.push(t);
       saveKb(); renderKanban(); closeModal();
     });
-    var permDelBtn = el("button", "kb-btn kb-btn-danger", icon("x") + "წაშლა სამუდამოდ");
+    var permDelBtn = el("button", "kb-btn kb-btn-danger", icon("x") + "Delete for good");
     permDelBtn.addEventListener("click", function () {
-      if (!confirm("ტასკი სამუდამოდ წაიშალოს? არქივში არ შეინახება და ვერ აღდგება.")) return;
+      if (!confirm("Delete this task for good? It is not kept in the archive and cannot be brought back.")) return;
       kb.tasks = kb.tasks.filter(function (x) { return x.id !== t.id; });
       saveKb(); renderKanban(); closeModal();
     });
-    var closeBtn = el("button", "kb-btn ghost", "დახურვა");
+    var closeBtn = el("button", "kb-btn ghost", "Close");
     closeBtn.addEventListener("click", closeModal);
     foot.appendChild(doneBtn);
     foot.appendChild(delBtn);
@@ -1765,10 +1765,10 @@ const BRIEF = {
   function renderArchivePage() {
     archiveListEl.innerHTML = "";
     archiveCountEl.textContent = kb.archive.length
-      ? kb.archive.length + " წაშლილი ტასკი — დააჭირე დეტალებისთვის"
+      ? kb.archive.length + " deleted tasks - click one for details"
       : "";
     if (!kb.archive.length) {
-      archiveListEl.appendChild(el("div", "arch-empty", "არქივი ცარიელია — წაშლილი ტასკები აქ გადმოვა."));
+      archiveListEl.appendChild(el("div", "arch-empty", "The archive is empty - deleted tasks land here."));
       return;
     }
     kb.archive.slice().reverse().forEach(function (t) {
@@ -1776,7 +1776,7 @@ const BRIEF = {
       var card = el("div", "arch-card",
         '<div class="arch-top">' +
           '<span class="arch-title">' + md(t.title) + '</span>' +
-          '<span class="arch-meta">წაიშალა ' + md(shortAt(t.archivedAt)) + '</span>' +
+          '<span class="arch-meta">deleted ' + md(shortAt(t.archivedAt)) + '</span>' +
         '</div>' +
         (t.desc ? '<div class="arch-desc">' + md(t.desc) + '</div>' : '') +
         '<div class="kb-badges">' +
@@ -1792,7 +1792,7 @@ const BRIEF = {
         if (details) { details.remove(); details = null; return; }
         details = el("div", "arch-details");
         if ((t.aiNotes || []).length) {
-          details.appendChild(el("div", "kb-m-h", "AI — რა შეიცვალა"));
+          details.appendChild(el("div", "kb-m-h", "AI - what changed"));
           var aiBox = el("div", "kb-m-ai");
           t.aiNotes.slice().reverse().forEach(function (n) {
             aiBox.appendChild(el("div", null, md(n.text) + ' <span class="at">' + md(shortAt(n.at)) + '</span>'));
@@ -1800,17 +1800,17 @@ const BRIEF = {
           details.appendChild(aiBox);
         }
         if ((t.comments || []).length) {
-          details.appendChild(el("div", "kb-m-h", "კომენტარები"));
+          details.appendChild(el("div", "kb-m-h", "Comments"));
           var cbox = el("div", "kb-m-comments");
           t.comments.forEach(function (c) {
             cbox.appendChild(el("div", "kb-comment",
-              '<span class="by">' + (c.by === "ai" ? "AI" : "შენ") + '</span>' + md(c.text) +
+              '<span class="by">' + (c.by === "ai" ? "AI" : "You") + '</span>' + md(c.text) +
               ' <span class="at">' + md(shortAt(c.at)) + '</span>'));
           });
           details.appendChild(cbox);
         }
         var actions = el("div", "arch-actions");
-        var restoreBtn = el("button", "kb-btn", icon("restore") + "დაფაზე აღდგენა");
+        var restoreBtn = el("button", "kb-btn", icon("restore") + "Restore to the board");
         restoreBtn.addEventListener("click", function (ev) {
           ev.stopPropagation();
           kb.archive = kb.archive.filter(function (x) { return x.id !== t.id; });
@@ -1823,10 +1823,10 @@ const BRIEF = {
           renderArchivePage();
         });
         actions.appendChild(restoreBtn);
-        var permBtn = el("button", "kb-btn kb-btn-danger", icon("x") + "სამუდამოდ წაშლა");
+        var permBtn = el("button", "kb-btn kb-btn-danger", icon("x") + "Delete for good");
         permBtn.addEventListener("click", function (ev) {
           ev.stopPropagation();
-          if (!confirm("არქივიდან სამუდამოდ წაიშალოს? ვერ აღდგება.")) return;
+          if (!confirm("Delete this from the archive for good? It cannot be brought back.")) return;
           kb.archive = kb.archive.filter(function (x) { return x.id !== t.id; });
           saveKb();
           renderArchivePage();
@@ -1852,7 +1852,7 @@ const BRIEF = {
   var kbGenerateBtn = document.getElementById("kb-generate");
 
   var kbCopyAllBtn = document.getElementById("kb-copy-all");
-  var BOARD_COPY_TITLE = "მთელი დაფა ტექსტად, პროექტების მიხედვით — AI პრომპტისთვის";
+  var BOARD_COPY_TITLE = "The whole board as text, grouped by project - for an AI prompt";
   kbCopyAllBtn.addEventListener("click", function () {
     if (!(kb.tasks || []).length) return;
     copyTextToClipboard(boardCopyText(), kbCopyAllBtn, BOARD_COPY_TITLE);
@@ -1874,28 +1874,28 @@ const BRIEF = {
   if (api) {
     kbCheckBtn.addEventListener("click", async function () {
       kbCheckBtn.disabled = true;
-      kbCheckBtn.textContent = "მოწმდება… (1-2 წთ)";
+      kbCheckBtn.textContent = "Checking… (1-2 min)";
       var ok = await api.kanbanCheck();
-      if (!ok) kbCheckBtn.textContent = "ბევრი პროცესია გაშვებული…";
+      if (!ok) kbCheckBtn.textContent = "Too many runs in progress…";
     });
     kbReplanBtn.addEventListener("click", async function () {
-      if (!confirm("AI სამომავლო გეგმას გადააწყობს დაფის ტასკებისა და სტატუსების მიხედვით. ამას რამდენიმე წუთი სჭირდება. გავაგრძელო?")) return;
+      if (!confirm("The AI rearranges the plan ahead around the board's tasks and their statuses. This takes a few minutes. Continue?")) return;
       kbReplanBtn.disabled = true;
-      kbReplanBtn.textContent = "იგეგმება…";
+      kbReplanBtn.textContent = "Planning…";
       var ok = await api.replan();
-      if (!ok) kbReplanBtn.textContent = "სხვა AI პროცესია გაშვებული…";
+      if (!ok) kbReplanBtn.textContent = "Another AI run is in progress…";
     });
     kbGenerateBtn.addEventListener("click", async function () {
       kbGenerateBtn.disabled = true;
-      kbGenerateBtn.textContent = "გენერირდება…";
+      kbGenerateBtn.textContent = "Generating…";
       var ok = api.kanbanGenerate ? await api.kanbanGenerate() : false;
-      if (!ok) kbGenerateBtn.textContent = "ბევრი პროცესია გაშვებული…";
+      if (!ok) kbGenerateBtn.textContent = "Too many runs in progress…";
     });
   } else {
     kbCheckBtn.disabled = true;
     kbReplanBtn.disabled = true;
     kbGenerateBtn.disabled = true;
-    kbCheckBtn.title = kbReplanBtn.title = kbGenerateBtn.title = "მხოლოდ დესკტოპ-აპშია ხელმისაწვდომი";
+    kbCheckBtn.title = kbReplanBtn.title = kbGenerateBtn.title = "Available in the desktop app only";
   }
 
   kanbanStore.load().then(function (data) {
@@ -1917,7 +1917,7 @@ const BRIEF = {
   function anBarRows(container, rows, maxRows) {
     container.innerHTML = "";
     if (!rows.length) {
-      container.appendChild(el("div", "an-empty", "მონაცემები ჯერ არ არის."));
+      container.appendChild(el("div", "an-empty", "No data yet."));
       return;
     }
     var max = rows[0].value || 1;
@@ -1939,7 +1939,7 @@ const BRIEF = {
     cols.forEach(function (c) { if (c.value > max) max = c.value; });
     var any = cols.some(function (c) { return c.value > 0; });
     if (!any) {
-      container.appendChild(el("div", "an-empty", "მონაცემები გროვდება — მონიტორი ყოველ 30 წუთში იწერს ცვლილებებს."));
+      container.appendChild(el("div", "an-empty", "Data is still gathering - the monitor records changes every 30 minutes."));
       return;
     }
     cols.forEach(function (c) {
@@ -1979,10 +1979,10 @@ const BRIEF = {
     var tilesEl = document.getElementById("an-tiles");
     tilesEl.innerHTML = "";
     [
-      { v: events.length ? String(events.length) : "—", k: "ფაილის ცვლილება კვირაში" },
-      { v: topProj ? shortProject(topProj) : "—", k: "ყველაზე აქტიური პროექტი" },
-      { v: peakHour !== undefined && peakHour !== null && events.length ? peakHour + ":00" : "—", k: "პიკური საათი" },
-      { v: String(Object.keys(activeDays).length), k: "აქტიური დღე 7-დან" }
+      { v: events.length ? String(events.length) : "-", k: "file changes this week" },
+      { v: topProj ? shortProject(topProj) : "-", k: "most active project" },
+      { v: peakHour !== undefined && peakHour !== null && events.length ? peakHour + ":00" : "—", k: "peak hour" },
+      { v: String(Object.keys(activeDays).length), k: "active days out of 7" }
     ].forEach(function (t) {
       tilesEl.appendChild(el("div", "an-tile", '<div class="v">' + md(t.v) + '</div><div class="k">' + md(t.k) + '</div>'));
     });
@@ -2007,7 +2007,7 @@ const BRIEF = {
       var d = String(e.ts || "").slice(0, 10);
       dayScore[d] = (dayScore[d] || 0) + 1;
     });
-    var weekdays = ["კვ", "ორ", "სამ", "ოთხ", "ხუთ", "პარ", "შაბ"];
+    var weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     var dayCols = days.map(function (d) {
       var wd = "";
       try { wd = weekdays[new Date(d + "T00:00:00").getDay()]; } catch (e) {}
@@ -2025,7 +2025,7 @@ const BRIEF = {
     filesEl.innerHTML = "";
     var fileRows = Object.keys(fileCount).sort(function (a, b) { return fileCount[b] - fileCount[a]; }).slice(0, 12);
     if (!fileRows.length) {
-      filesEl.appendChild(el("div", "an-empty", "მონაცემები გროვდება — პირველი ჩანაწერები მონიტორის მომდევნო გაშვებისას გამოჩნდება (~30 წთ)."));
+      filesEl.appendChild(el("div", "an-empty", "Data is still gathering - the first entries appear on the monitor's next run (~30 min)."));
     } else {
       fileRows.forEach(function (key) {
         var parts = key.split("|");
@@ -2043,7 +2043,7 @@ const BRIEF = {
   var aiCurTimer = null;
 
   function modeLabel(mode) {
-    return AI_LABELS[mode] ? AI_LABELS[mode].replace("…", "") : "AI პროცესი";
+    return AI_LABELS[mode] ? AI_LABELS[mode].replace("…", "") : "AI run";
   }
 
   var aiCtxBtn = document.getElementById("ai-context-btn");
@@ -2075,11 +2075,11 @@ const BRIEF = {
         var label = el("span", "ai-cur-label");
         labels[r.id] = label;
         row.appendChild(label);
-        var killBtn = el("button", "ai-kill-btn", icon("x") + "პროცესის გათიშვა");
+        var killBtn = el("button", "ai-kill-btn", icon("x") + "Stop this run");
         killBtn.addEventListener("click", async function () {
-          if (!confirm("გავთიშო ეს AI პროცესი? გაშვება ისტორიაში დაფიქსირდება სტატუსით: გათიშული.")) return;
+          if (!confirm("Stop this AI run? It goes into the history with the status: stopped.")) return;
           killBtn.disabled = true;
-          killBtn.textContent = "ითიშება…";
+          killBtn.textContent = "Stopping…";
           await api.aiKill(r.id);
         });
         row.appendChild(killBtn);
@@ -2096,7 +2096,7 @@ const BRIEF = {
       paintCur();
       aiCurTimer = setInterval(paintCur, 1000);
     } else {
-      curEl.appendChild(el("div", "an-empty", "AI პროცესი ამჟამად არ მიმდინარეობს."));
+      curEl.appendChild(el("div", "an-empty", "No AI run in progress."));
     }
 
     var runs = [];
@@ -2112,10 +2112,10 @@ const BRIEF = {
     var tilesEl = document.getElementById("ai-tiles");
     tilesEl.innerHTML = "";
     [
-      { v: String(weekRuns.length), k: "გაშვება ბოლო 7 დღეში" },
-      { v: "$" + totalCost.toFixed(2), k: "ღირებულება 7 დღეში" },
-      { v: totalIn.toLocaleString(), k: "input ტოკენი" },
-      { v: totalOut.toLocaleString(), k: "output ტოკენი" }
+      { v: String(weekRuns.length), k: "runs in the last 7 days" },
+      { v: "$" + totalCost.toFixed(2), k: "cost over 7 days" },
+      { v: totalIn.toLocaleString(), k: "input tokens" },
+      { v: totalOut.toLocaleString(), k: "output tokens" }
     ].forEach(function (t) {
       tilesEl.appendChild(el("div", "an-tile", '<div class="v">' + md(t.v) + '</div><div class="k">' + md(t.k) + '</div>'));
     });
@@ -2125,7 +2125,7 @@ const BRIEF = {
     var runsEl = document.getElementById("ai-runs");
     runsEl.innerHTML = "";
     if (!runs.length) {
-      runsEl.appendChild(el("div", "an-empty", "ჯერ არცერთი გაშვება არ დაფიქსირებულა — ჟურნალი ახალი გაშვებებიდან შეივსება."));
+      runsEl.appendChild(el("div", "an-empty", "No runs recorded yet - the journal fills up from the next run on."));
       return;
     }
     runs.slice(0, 40).forEach(function (r) {
@@ -2136,9 +2136,9 @@ const BRIEF = {
         : "—";
       var cost = r.costUsd ? "$" + r.costUsd.toFixed(3) : "—";
       var RUN_STATUS = {
-        killed: "გათიშული", skipped: "გამოტოვებული", failed: "ჩავარდა",
-        timeout: "ტაიმაუტი", incomplete: "არასრული", partial: "ნაწილობრივი",
-        thin: "მოკლე პასუხი", ok: "OK"
+        killed: "stopped", skipped: "skipped", failed: "failed",
+        timeout: "timeout", incomplete: "incomplete", partial: "partial",
+        thin: "short answer", ok: "OK"
       };
       var statusCls = RUN_STATUS[r.status] ? r.status : "ok";
       var statusLabel = RUN_STATUS[r.status] || "OK";
@@ -2146,7 +2146,7 @@ const BRIEF = {
         '<span class="c">' + md(when) + '</span>' +
         '<span>' + md(modeLabel(r.mode)) + '</span>' +
         '<span class="c">' + md(dur) + '</span>' +
-        '<span class="c" title="input / output ტოკენები">' + md(tok) + ' · ' + md(cost) + '</span>' +
+        '<span class="c" title="input / output tokens">' + md(tok) + ' · ' + md(cost) + '</span>' +
         '<span class="ai-run-status-' + statusCls + '"></span>');
       var st = row.querySelector("span:last-child");
       st.textContent = statusLabel;
@@ -2168,7 +2168,7 @@ const BRIEF = {
     var info = await api.dirInfo(p);
     if (!info) return;
     // Never create silently — the user confirms first.
-    if (!confirm("შეიქმნას ტასკი ფოლდერისთვის: " + info.name + "?")) return;
+    if (!confirm("Create a task for the folder: " + info.name + "?")) return;
     var nt = {
       id: newTaskId(), title: info.name, desc: "", status: "planning", done: false,
       createdBy: "user", createdAt: nowISO(), updatedAt: nowISO(),
@@ -2293,7 +2293,7 @@ const BRIEF = {
     // now, a declined one is gone, and the empty slot is being refilled.
     var ideas = arr(entry.ideas).filter(function (i) { return i && i.state === "new"; });
     box.appendChild(el("div", "idea-head",
-      "AI-ის შემოთავაზებები · " + md(entry.generatedAt || "")));
+      "AI suggestions - " + md(entry.generatedAt || "")));
     ideas.forEach(function (idea) {
       var row = el("div", "idea");
       row.appendChild(el("div", "idea-title",
@@ -2303,11 +2303,11 @@ const BRIEF = {
       var subs = arr(idea.subtasks);
       if (subs.length) row.appendChild(el("div", "idea-subs", md(subs.map(String).join(" · "))));
       var acts = el("div", "idea-acts");
-      var yes = el("button", "kb-btn", "მიღება — ტასკად");
+      var yes = el("button", "kb-btn", "Accept - as a task");
       yes.addEventListener("click", function () { acceptIdea(p, idea); });
       acts.appendChild(yes);
-      var no = el("button", "kb-btn ghost", "უარყოფა");
-      no.title = "აღარ შემოგთავაზებს — უარყოფილი იდეები ყოველ მომდევნო გაშვებაში ეგზავნება მოდელს, როგორც აკრძალული სია";
+      var no = el("button", "kb-btn ghost", "Decline");
+      no.title = "It will not come back - declined ideas are sent to the model on every later run as a forbidden list";
       no.addEventListener("click", function () { declineIdea(p, idea); });
       acts.appendChild(no);
       row.appendChild(acts);
@@ -2318,8 +2318,8 @@ const BRIEF = {
     if (ideas.length < 3) {
       box.appendChild(el("div", "idea-why",
         ideasRefilling[String(p.dir).toLowerCase()]
-          ? "AI ახალ იდეას წერს — ბარათი თავად შეივსება 3-მდე…"
-          : "ნაკლებია 3-ზე — „ახალი იდეები“ შეავსებს."));
+          ? "The AI is writing new ideas - the card fills itself back up to 3…"
+          : "Fewer than 3 - New ideas tops it up."));
     }
     return box;
   }
@@ -2335,18 +2335,18 @@ const BRIEF = {
     var chips = el("div", "pj-chips");
     arr(p.stack).slice(0, 6).forEach(function (s) { chips.appendChild(el("span", "pj-chip", md(String(s)))); });
     if (p.isGit) chips.appendChild(el("span", "pj-chip", "git · " + md(p.branch || "")));
-    if (p.dirtyCount) chips.appendChild(el("span", "pj-chip hot", md(p.dirtyCount + " დაუკომიტებელი")));
+    if (p.dirtyCount) chips.appendChild(el("span", "pj-chip hot", md(p.dirtyCount + " uncommitted")));
     if (p.todoCount) chips.appendChild(el("span", "pj-chip", "TODO " + p.todoCount));
-    if (p.changed14d) chips.appendChild(el("span", "pj-chip", p.changed14d + " ცვლილება / 14დღე"));
+    if (p.changed14d) chips.appendChild(el("span", "pj-chip", p.changed14d + " changes / 14d"));
     card.appendChild(chips);
 
     var lines = el("div", "pj-lines");
     var desc = p.pkgDesc || p.readme;
     if (desc) lines.appendChild(el("div", null, md(String(desc).slice(0, 180))));
     var commits = arr(p.lastCommits);
-    if (commits.length) lines.appendChild(el("div", null, "ბოლო: <code>" + md(String(commits[0])) + "</code>"));
+    if (commits.length) lines.appendChild(el("div", null, "latest: <code>" + md(String(commits[0])) + "</code>"));
     var dirty = arr(p.dirtySample);
-    if (dirty.length) lines.appendChild(el("div", null, "დაუკომიტებელი: <code>" + md(dirty.slice(0, 3).map(String).join(", ")) + "</code>"));
+    if (dirty.length) lines.appendChild(el("div", null, "uncommitted: <code>" + md(dirty.slice(0, 3).map(String).join(", ")) + "</code>"));
     var todos = arr(p.todoSample);
     if (todos.length) lines.appendChild(el("div", null, "TODO: <code>" + md(String(todos[0])) + "</code>"));
     card.appendChild(lines);
@@ -2356,11 +2356,11 @@ const BRIEF = {
       return !t.done && (t.dirs || []).some(function (d) { return d === p.dir; });
     });
     if (linked.length) {
-      card.appendChild(el("div", "pj-lines", "ტასკები: " + md(linked.map(function (t) { return t.title; }).join(" · "))));
+      card.appendChild(el("div", "pj-lines", "Tasks: " + md(linked.map(function (t) { return t.title; }).join(" - "))));
     }
 
     var acts = el("div", "pj-acts");
-    var openBtn = el("button", "kb-btn ghost", "ფოლდერის გახსნა");
+    var openBtn = el("button", "kb-btn ghost", "Open the folder");
     openBtn.addEventListener("click", function () { if (api && api.projectsOpen) api.projectsOpen(p.dir); });
     acts.appendChild(openBtn);
     // Same folder, every task on the board — the projects-page twin of the
@@ -2371,7 +2371,7 @@ const BRIEF = {
       });
     });
     if (pjTasks.length) {
-      var pjCopy = el("button", "kb-btn ghost", icon("copy") + "ტასკების კოპირება (" + pjTasks.length + ")");
+      var pjCopy = el("button", "kb-btn ghost", icon("copy") + "Copy tasks (" + pjTasks.length + ")");
       pjCopy.title = PROJ_COPY_TITLE;
       pjCopy.addEventListener("click", function () {
         copyTextToClipboard(projectCopyText(p.name || dirBase(p.dir), pjTasks), pjCopy, PROJ_COPY_TITLE);
@@ -2379,7 +2379,7 @@ const BRIEF = {
       acts.appendChild(pjCopy);
     }
 
-    var taskBtn = el("button", "kb-btn", "ტასკის შექმნა");
+    var taskBtn = el("button", "kb-btn", "Create a task");
     taskBtn.addEventListener("click", function () {
       var t = {
         id: newTaskId(), title: p.name, desc: "", status: "planning", done: false,
@@ -2398,7 +2398,7 @@ const BRIEF = {
     if (api && api.askSend) {
       // Ask with this project in focus: the run gets its full card (readme,
       // commits, dirty files, TODOs) instead of the one-line summary.
-      var askBtn = el("button", "kb-btn ghost", "ჰკითხე ამაზე");
+      var askBtn = el("button", "kb-btn ghost", "Ask about this");
       askBtn.addEventListener("click", function () {
         setAskFocus(p.dir, p.name);
         showView("ask");
@@ -2406,12 +2406,12 @@ const BRIEF = {
       acts.appendChild(askBtn);
     }
     if (api && api.ideasGenerate) {
-      var ideaBtn = el("button", "kb-btn ghost", entry ? "ახალი იდეები" : "იდეები (3)");
-      ideaBtn.title = "ბარათზე ყოველთვის 3 ღია შემოთავაზებაა: მიღება ტასკს შექმნის, უარყოფა სამუდამოდ მოხსნის, დარჩენილი ადგილი კი ახალი იდეით ივსება";
+      var ideaBtn = el("button", "kb-btn ghost", entry ? "New ideas" : "Ideas (3)");
+      ideaBtn.title = "The card always holds 3 open suggestions: accepting makes a task, declining removes it for good, and the free slot fills with a new idea";
       ideaBtn.addEventListener("click", async function () {
         var label = ideaBtn.textContent;
         ideaBtn.disabled = true;
-        ideaBtn.textContent = "იდეები იწერება…";
+        ideaBtn.textContent = "Writing ideas…";
         var started = await api.ideasGenerate(p.dir);
         // Pool full: give the button back instead of spinning forever.
         if (!started) { ideaBtn.disabled = false; ideaBtn.textContent = label; }
@@ -2419,10 +2419,10 @@ const BRIEF = {
       acts.appendChild(ideaBtn);
     }
     if (api && api.ignoreAdd) {
-      var igBtn = el("button", "kb-btn ghost", "იგნორი");
-      igBtn.title = "ეს ფოლდერი აღარსად ჩაითვლება — არც ანალიტიკაში, არც პროექტებში, არც AI-ის კონტექსტში";
+      var igBtn = el("button", "kb-btn ghost", "Ignore");
+      igBtn.title = "This folder stops counting anywhere - not in analytics, not in projects, not in the AI context";
       igBtn.addEventListener("click", async function () {
-        if (!confirm(p.name + " იგნორში გადავიდეს? აღარ დაითვლება ანალიტიკაში, პროექტებში და AI-ის კონტექსტში.")) return;
+        if (!confirm("Move " + p.name + " to the ignored list? It stops counting in analytics, projects and the AI context.")) return;
         await api.ignoreAdd(p.dir);
         renderProjectsPage();
       });
@@ -2490,19 +2490,19 @@ const BRIEF = {
     if (!all.length) return;
 
     if (!matched.length) {
-      hint.textContent = "ვერაფერი მოიძებნა — სცადე სახელის ან ფოლდერის ნაწილი.";
+      hint.textContent = "Nothing found - try part of the name or the folder.";
       return;
     }
     if (projectsQuery) {
-      hint.textContent = matched.length + " ნაპოვნი " + all.length + "-დან";
+      hint.textContent = matched.length + " found out of " + all.length;
     } else if (projectsShowAll) {
-      hint.textContent = "ყველა " + all.length + " პროექტი · ";
-      var less = el("button", null, "მხოლოდ ტოპ " + PROJECTS_TOP);
+      hint.textContent = "All " + all.length + " projects - ";
+      var less = el("button", null, "Top " + PROJECTS_TOP + " only");
       less.addEventListener("click", function () { projectsShowAll = false; paintProjects(); });
       hint.appendChild(less);
     } else if (all.length > PROJECTS_TOP) {
-      hint.textContent = "ყველაზე აქტიური " + shown.length + " პროექტი · ";
-      var more = el("button", null, "ყველა (" + all.length + ")");
+      hint.textContent = "The " + shown.length + " most active projects - ";
+      var more = el("button", null, "All (" + all.length + ")");
       more.addEventListener("click", function () { projectsShowAll = true; paintProjects(); });
       hint.appendChild(more);
     }
@@ -2512,16 +2512,16 @@ const BRIEF = {
   async function renderProjectsPage() {
     var list = document.getElementById("projects-list");
     if (!api || !api.projectsLoad) {
-      list.innerHTML = '<div class="an-empty">პროექტების რეესტრი მხოლოდ აპში მუშაობს.</div>';
+      list.innerHTML = '<div class="an-empty">The project registry works in the app only.</div>';
       return;
     }
-    if (!projectsCache.projects.length) list.innerHTML = '<div class="an-empty">იტვირთება…</div>';
+    if (!projectsCache.projects.length) list.innerHTML = '<div class="an-empty">Loading…</div>';
     projectsCache = (await api.projectsLoad()) || { generatedAt: null, projects: [] };
     if (api.ideasLoad) ideasCache = (await api.ideasLoad()) || { entries: [], declined: [], accepted: [] };
     var ps = arr(projectsCache.projects);
     document.getElementById("projects-sub").textContent = ps.length
-      ? ps.length + " პროექტი · განახლდა " + (projectsCache.generatedAt || "—")
-      : "რეესტრი ჯერ არ აგებულა — დააჭირე „განახლებას“.";
+      ? ps.length + " projects - refreshed " + (projectsCache.generatedAt || "-")
+      : "The registry has not been built yet - press Refresh.";
     paintProjects();
   }
 
@@ -2545,13 +2545,13 @@ const BRIEF = {
   if (projectsRefreshBtn && api && api.projectsRefresh) {
     projectsRefreshBtn.addEventListener("click", async function () {
       projectsRefreshBtn.disabled = true;
-      projectsRefreshBtn.textContent = "სკანირება…";
+      projectsRefreshBtn.textContent = "Scanning…";
       await api.projectsRefresh();
     });
     try {
       api.onProjectsUpdated(function () {
         projectsRefreshBtn.disabled = false;
-        projectsRefreshBtn.textContent = "განახლება";
+        projectsRefreshBtn.textContent = "Refresh";
         if (!views.projects.hidden) renderProjectsPage();
       });
     } catch (e) {}
@@ -2570,11 +2570,11 @@ const BRIEF = {
   /* ---- ask page: free-text questions about the project registry ---- */
 
   var ASK_PRESETS = [
-    "რა უნდა გავაკეთო დღეს?",
-    "რომელი პროექტია ყველაზე ახლოს დასრულებასთან?",
-    "სად მაქვს დაუკომიტებელი კოდი, რომელიც უნდა დავაკომიტო?",
-    "რომელი პროექტი მივატოვე და ღირს თუ არა დაბრუნება?",
-    "სად დამრჩა ყველაზე მეტი დაუმთავრებელი TODO?"
+    "What should I do today?",
+    "Which project is closest to finished?",
+    "Where do I have uncommitted code that should go in?",
+    "Which project did I abandon, and is it worth going back to?",
+    "Where did I leave the most unfinished TODOs?"
   ];
 
   var askFocus = { dir: "", name: "" };
@@ -2590,8 +2590,8 @@ const BRIEF = {
     box.hidden = !askFocus.dir;
     if (!askFocus.dir) return;
     box.innerHTML = "";
-    box.appendChild(el("span", null, "ფოკუსში: " + md(askFocus.name || askFocus.dir) + " — "));
-    var clear = el("button", "ask-chip", "მოხსნა");
+    box.appendChild(el("span", null, "In focus: " + md(askFocus.name || askFocus.dir) + " - "));
+    var clear = el("button", "ask-chip", "Clear");
     clear.addEventListener("click", function () { setAskFocus("", ""); });
     box.appendChild(clear);
   }
@@ -2599,7 +2599,7 @@ const BRIEF = {
   function askMsgNode(m) {
     var isUser = m.by === "user";
     var node = el("div", "ask-msg" + (isUser ? " user" : ""));
-    node.appendChild(el("div", "ask-by", isUser ? "შენ" : "AI"));
+    node.appendChild(el("div", "ask-by", isUser ? "You" : "AI"));
     node.appendChild(el("div", "ask-text", md(String(m.text || ""))));
     var refs = arr(m.projects);
     if (refs.length) node.appendChild(el("div", "ask-refs", md(refs.map(String).join(" · "))));
@@ -2608,7 +2608,7 @@ const BRIEF = {
       row.appendChild(el("div", "idea-title", md(String(s.title || ""))));
       if (s.desc) row.appendChild(el("div", "idea-desc", md(String(s.desc))));
       var acts = el("div", "idea-acts");
-      var mk = el("button", "kb-btn", "ტასკის შექმნა");
+      var mk = el("button", "kb-btn", "Create a task");
       mk.addEventListener("click", function () {
         var t = {
           id: newTaskId(), title: String(s.title || ""), desc: String(s.desc || ""),
@@ -2633,7 +2633,7 @@ const BRIEF = {
   async function renderAskPage() {
     var thread = document.getElementById("ask-thread");
     if (!api || !api.askLoad) {
-      thread.innerHTML = '<div class="an-empty">კითხვა მხოლოდ აპში მუშაობს.</div>';
+      thread.innerHTML = '<div class="an-empty">Ask works in the app only.</div>';
       return;
     }
     var presets = document.getElementById("ask-presets");
@@ -2651,7 +2651,7 @@ const BRIEF = {
     var msgs = arr(await api.askLoad());
     thread.innerHTML = "";
     if (!msgs.length) {
-      thread.appendChild(el("div", "an-empty", "ჯერ არაფერი გიკითხავს. აირჩიე მზა კითხვა ან დაწერე შენი."));
+      thread.appendChild(el("div", "an-empty", "You have not asked anything yet. Pick a ready question or write your own."));
       return;
     }
     // Newest first: the answer you just waited for is at the top, not after
@@ -2659,7 +2659,7 @@ const BRIEF = {
     msgs.slice().reverse().forEach(function (m) { thread.appendChild(askMsgNode(m)); });
     // The run is still in flight while the last message is the question.
     if (msgs[msgs.length - 1].by === "user") {
-      thread.insertBefore(el("div", "ask-msg", '<div class="ask-pending">AI ფიქრობს… პასუხი აქვე გამოჩნდება.</div>'), thread.firstChild);
+      thread.insertBefore(el("div", "ask-msg", '<div class="ask-pending">The AI is thinking… the answer appears here.</div>'), thread.firstChild);
     }
   }
 
@@ -2675,7 +2675,7 @@ const BRIEF = {
     // The AI pool is capped: say so instead of leaving a question that never
     // gets an answer sitting in the thread.
     askNote(res && res.started === false
-      ? "AI-ის ლიმიტი სავსეა — კითხვა ჩაწერილია, გაუშვი ხელახლა, როცა მიმდინარე პროცესები დასრულდება."
+      ? "The AI limit is full - your question is saved, send it again once the current runs finish."
       : "");
     renderAskPage();
   }
@@ -2699,7 +2699,7 @@ const BRIEF = {
   var askClearBtn = document.getElementById("ask-clear");
   if (askClearBtn && api && api.askClear) {
     askClearBtn.addEventListener("click", async function () {
-      if (!confirm("ჩატის ისტორია წაიშალოს?")) return;
+      if (!confirm("Clear the chat history?")) return;
       await api.askClear();
       renderAskPage();
     });
@@ -2715,7 +2715,7 @@ const BRIEF = {
   async function renderIgnorePage() {
     var list = document.getElementById("ig-list");
     if (!api || !api.ignoreLoad) {
-      list.innerHTML = '<div class="an-empty">იგნორის სია მხოლოდ აპში მუშაობს.</div>';
+      list.innerHTML = '<div class="an-empty">The ignored list works in the app only.</div>';
       return;
     }
     var data = (await api.ignoreLoad()) || { dirs: [] };
@@ -2723,12 +2723,12 @@ const BRIEF = {
     document.getElementById("ig-count").textContent = String(dirs.length);
     list.innerHTML = "";
     if (!dirs.length) {
-      list.appendChild(el("div", "an-empty", "ჯერ არცერთი ფოლდერი არ არის იგნორში."));
+      list.appendChild(el("div", "an-empty", "No folder is ignored yet."));
     }
     dirs.forEach(function (d) {
       var row = el("div", "ig-row");
       row.appendChild(el("div", "ig-path on", md(String(d))));
-      var rm = el("button", "kb-btn ghost", "დაბრუნება");
+      var rm = el("button", "kb-btn ghost", "Restore");
       rm.addEventListener("click", async function () {
         await api.ignoreRemove(String(d));
         renderIgnorePage();
@@ -2747,16 +2747,16 @@ const BRIEF = {
     var rows = arr(await api.ignoreSearch(q));
     box.innerHTML = "";
     if (!rows.length) {
-      box.appendChild(el("div", "an-empty", "ვერაფერი მოიძებნა."));
+      box.appendChild(el("div", "an-empty", "Nothing found."));
       return;
     }
     rows.forEach(function (r) {
       var row = el("div", "ig-row");
       row.appendChild(el("div", "ig-path", md(String(r.dir))));
       if (r.ignored) {
-        row.appendChild(el("div", "ig-path", "იგნორშია"));
+        row.appendChild(el("div", "ig-path", "ignored"));
       } else {
-        var add = el("button", "kb-btn ghost", "იგნორი");
+        var add = el("button", "kb-btn ghost", "Ignore");
         add.addEventListener("click", async function () {
           await api.ignoreAdd(String(r.dir));
           renderIgnorePage();
@@ -2796,21 +2796,21 @@ const BRIEF = {
     questionsWrap.hidden = !qs.length || views.brief.hidden;
     if (!qs.length) return;
     var wrap = el("div", "q-box");
-    wrap.appendChild(el("div", "q-title", "AI-ს კითხვები შენთან"));
+    wrap.appendChild(el("div", "q-title", "The AI's questions for you"));
     qs.slice(0, 3).forEach(function (q) {
       var item = el("div", "q-item");
       item.appendChild(el("div", "q-text", md(q.text)));
       var row = el("div", "q-row");
       var inp = document.createElement("input");
       inp.className = "kb-input";
-      inp.placeholder = "პასუხი…";
-      var btn = el("button", "kb-btn", "პასუხი");
+      inp.placeholder = "Answer…";
+      var btn = el("button", "kb-btn", "Answer");
       async function send() {
         var v = inp.value.trim();
         if (!v) return;
         btn.disabled = true;
         await api.questionsAnswer(q.id, v);
-        item.innerHTML = '<div class="q-answered">' + md(q.text) + " — პასუხი შენახულია, შემდეგ ბრიფინგში გაითვალისწინება.</div>";
+        item.innerHTML = '<div class="q-answered">' + md(q.text) + " - answer saved, it is taken into account in the next brief.</div>";
       }
       btn.addEventListener("click", send);
       inp.addEventListener("keydown", function (ev) { if (ev.key === "Enter") send(); });
@@ -2827,13 +2827,13 @@ const BRIEF = {
   var updateStateCache = { status: "idle", version: null, message: "", percent: 0 };
 
   var UPDATE_TEXT = {
-    idle: "შემოწმება არ განხორციელებულა.",
-    checking: "მოწმდება…",
-    current: "უახლესი ვერსია გიდგას.",
-    downloading: "ახალი ვერსია იწერება…",
-    ready: "ახალი ვერსია ჩამოიწერა — გადატვირთვისთვის მზადაა.",
-    error: "შეცდომა განახლებისას.",
-    dev: "განახლება მხოლოდ დაინსტალირებულ ვერსიაში მუშაობს."
+    idle: "No check has been run.",
+    checking: "Checking…",
+    current: "You are on the latest version.",
+    downloading: "Downloading the new version…",
+    ready: "The new version is downloaded - ready to restart.",
+    error: "Update failed.",
+    dev: "Updates only work in the installed build."
   };
 
   function paintUpdateBox() {
@@ -2846,7 +2846,7 @@ const BRIEF = {
     if (s.version && (s.status === "ready" || s.status === "downloading")) txt += " (v" + s.version + ")";
     if (s.status === "error" && s.message) txt += " " + s.message;
     box.appendChild(el("div", "set-status", md(txt)));
-    var checkBtn = el("button", "kb-btn", "განახლების შემოწმება");
+    var checkBtn = el("button", "kb-btn", "Check for updates");
     checkBtn.addEventListener("click", async function () {
       checkBtn.disabled = true;
       await api.updateCheck();
@@ -2854,7 +2854,7 @@ const BRIEF = {
     });
     box.appendChild(checkBtn);
     if (s.status === "ready") {
-      var instBtn = el("button", "kb-btn", "დაყენება და გადატვირთვა");
+      var instBtn = el("button", "kb-btn", "Install and restart");
       instBtn.style.marginLeft = "0.4rem";
       instBtn.addEventListener("click", function () { api.updateInstall(); });
       box.appendChild(instBtn);
@@ -2862,21 +2862,21 @@ const BRIEF = {
   }
 
   var SETTING_LABELS = {
-    autoUpdate: ["ავტომატური განახლება", "ახალ რელიზს თვითონ ჩამოწერს და გასვლისას დააყენებს"],
-    autoGenerate: ["ტასკების ავტო-გენერაცია", "დღეში ერთხელ პროექტების რეესტრიდან შემოგთავაზებს ახალ ტასკებს"],
-    autoPlanOnOpen: ["ჩეკლისტი გახსნისას", "ტასკს, რომელსაც გეგმა არ აქვს, გახსნისთანავე დაუგეგმავს ნაბიჯებს"],
-    autoIdeas: ["ფუნქციების იდეების განახლება", "როცა პროექტი დაიძვრება და ბარათზე ყველა შემოთავაზება უკვე განხილულია, დღეში მაქსიმუმ 3 პროექტს ახალ იდეებს დაუწერს"]
+    autoUpdate: ["Automatic updates", "Downloads a new release on its own and installs it on exit"],
+    autoGenerate: ["Generate tasks automatically", "Once a day, proposes new tasks from the project registry"],
+    autoPlanOnOpen: ["Checklist on opening", "A task with no plan gets its steps drawn up the moment you open it"],
+    autoIdeas: ["Refresh feature ideas", "When a project stirs and every suggestion on its card is decided, writes new ideas for up to 3 projects a day"]
   };
 
   async function renderSettingsPage() {
     var sub = document.getElementById("settings-sub");
     var toggles = document.getElementById("settings-toggles");
     if (!api || !api.settingsGet) {
-      sub.textContent = "პარამეტრები მხოლოდ აპში მუშაობს.";
+      sub.textContent = "Settings work in the app only.";
       return;
     }
     var info = await api.appInfo();
-    sub.textContent = "ვერსია " + info.version + (info.packaged ? "" : " · dev რეჟიმი");
+    sub.textContent = "Version " + info.version + (info.packaged ? "" : " - dev mode");
     var settings = await api.settingsGet();
     toggles.innerHTML = "";
     Object.keys(SETTING_LABELS).forEach(function (key) {
@@ -2922,7 +2922,7 @@ const BRIEF = {
     if (!box) return;
     box.innerHTML = "";
     if (!api || !api.zoomGet) {
-      box.appendChild(el("div", "hint", "ზუმი მხოლოდ აპში მუშაობს."));
+      box.appendChild(el("div", "hint", "Zoom works in the app only."));
       return;
     }
     var row = el("div", "zoom-row");
@@ -2936,12 +2936,12 @@ const BRIEF = {
       });
       return b;
     }
-    row.appendChild(btn("−", "დაპატარავება (Ctrl+-)", function () { return api.zoomStep(-1); }));
+    row.appendChild(btn("−", "Zoom out (Ctrl+-)", function () { return api.zoomStep(-1); }));
     row.appendChild(el("div", "zoom-val", fmtZoom(zoomFactor)));
-    row.appendChild(btn("+", "გადიდება (Ctrl++)", function () { return api.zoomStep(1); }));
-    row.appendChild(btn("100%", "საწყისზე დაბრუნება (Ctrl+0)", function () { return api.zoomSet(1); }));
+    row.appendChild(btn("+", "Zoom in (Ctrl++)", function () { return api.zoomStep(1); }));
+    row.appendChild(btn("100%", "Back to normal (Ctrl+0)", function () { return api.zoomSet(1); }));
     box.appendChild(row);
-    box.appendChild(el("div", "hint", "Ctrl და +/− ან Ctrl+თაგვის ბორბალი; Ctrl+0 საწყისზე აბრუნებს."));
+    box.appendChild(el("div", "hint", "Ctrl with +/− or Ctrl+mouse wheel; Ctrl+0 goes back to normal."));
   }
 
   if (api && api.zoomGet) {
@@ -2963,15 +2963,15 @@ const BRIEF = {
 
   var AI_EXPECTED = { full: 90, replan: 70, check: 120, "task-replan": 150, "task-generate": 120, "task-command": 120, ask: 90, ideas: 90, execute: 900 }; // seconds, rough
   var AI_LABELS = {
-    full: "AI ადგენს დღის ბრიფინგს…",
-    replan: "AI გეგმავს დღეს თავიდან…",
-    check: "AI ამოწმებს ტასკებს…",
-    "task-replan": "AI გეგმავს ტასკს თავიდან…",
-    "task-generate": "AI ეძებს ახალ მიმართულებებს…",
-    "task-command": "AI ასრულებს შენს კომენტარს…",
-    ask: "AI პასუხობს შენს კითხვას…",
-    ideas: "AI ეძებს ახალ ფუნქციებს პროექტისთვის…",
-    execute: "AI ასრულებს ტასკს პროექტში — ნახე VS Code…"
+    full: "The AI is drawing up today's brief…",
+    replan: "The AI is re-planning the day…",
+    check: "The AI is checking the tasks…",
+    "task-replan": "The AI is re-planning the task…",
+    "task-generate": "The AI is looking for new directions…",
+    "task-command": "The AI is acting on your comment…",
+    ask: "The AI is answering your question…",
+    ideas: "The AI is looking for new features for the project…",
+    execute: "The AI is carrying the task out in the project - see VS Code…"
   };
   // One column, bottom-right: problem toasts on top, the live activity popup at
   // the bottom, so nothing ever lands over the board.
@@ -2988,17 +2988,17 @@ const BRIEF = {
   /* ---- AI problems: failed / incomplete / late runs ---- */
 
   var PROB_TITLE = {
-    failed: "AI გაშვება ჩავარდა",
-    timeout: "AI ვერ დაასრულა (ტაიმაუტი)",
-    incomplete: "AI-მ დავალება ბოლომდე ვერ მიიყვანა",
-    partial: "AI-ს პასუხი ნაწილობრივ დაიკარგა",
-    thin: "AI-ს პასუხი არასრულია",
-    slow: "AI იგვიანებს",
-    ok: "AI დაგვიანებით დასრულდა"
+    failed: "The AI run failed",
+    timeout: "The AI did not finish (timeout)",
+    incomplete: "The AI could not finish the job",
+    partial: "Part of the AI answer was lost",
+    thin: "The AI answer is incomplete",
+    slow: "The AI is running late",
+    ok: "The AI finished late"
   };
 
   function probTitle(p) {
-    return (PROB_TITLE[p.status] || "AI ხარვეზი") + " · " + modeLabel(p.mode);
+    return (PROB_TITLE[p.status] || "AI problem") + " - " + modeLabel(p.mode);
   }
 
   // Text nodes, never innerHTML: these strings carry raw CLI error output.
@@ -3008,7 +3008,7 @@ const BRIEF = {
     var title = el("span", "ai-toast-title");
     title.textContent = probTitle(p);
     var close = el("button", "ai-toast-close", "&times;");
-    close.title = "დახურვა";
+    close.title = "Close";
     close.addEventListener("click", function () { box.remove(); });
     head.appendChild(title);
     head.appendChild(close);
@@ -3017,12 +3017,12 @@ const BRIEF = {
     msg.textContent = p.message || "";
     box.appendChild(msg);
     var actions = el("div", "ai-toast-actions");
-    var diag = el("button", "ai-toast-btn", "დეტალები (TXT)");
+    var diag = el("button", "ai-toast-btn", "Details (TXT)");
     diag.addEventListener("click", function () {
       if (api && api.aiOpenDiagnostics) api.aiOpenDiagnostics();
     });
     actions.appendChild(diag);
-    var page = el("button", "ai-toast-btn", "AI გვერდი");
+    var page = el("button", "ai-toast-btn", "AI page");
     page.addEventListener("click", function () { showView("ai"); box.remove(); });
     actions.appendChild(page);
     box.appendChild(actions);
@@ -3083,7 +3083,7 @@ const BRIEF = {
     try { list = await api.aiProblems(); } catch (e) {}
     box.innerHTML = "";
     if (!Array.isArray(list) || !list.length) {
-      box.appendChild(el("div", "an-empty", "ხარვეზი არ დაფიქსირებულა — ყველა გაშვება სუფთად დასრულდა."));
+      box.appendChild(el("div", "an-empty", "No problems recorded - every run finished clean."));
       return;
     }
     list.slice(0, 25).forEach(function (p) {
@@ -3119,9 +3119,9 @@ const BRIEF = {
       var remain = startedAt ? est.durationSec - (Date.now() - startedAt) / 1000 : est.durationSec;
       eta = " · ETA ~" + fmtDur(Math.max(5, remain));
     }
-    return "სავარაუდო: ~" + fmtTok(est.inputTokens) + " in / ~" + fmtTok(est.outputTokens) +
+    return "estimate: ~" + fmtTok(est.inputTokens) + " in / ~" + fmtTok(est.outputTokens) +
       " out · ~$" + (est.costUsd || 0).toFixed(2) + eta +
-      (est.source === "history" ? " (ისტორიით)" : " (საწყისი)");
+      (est.source === "history" ? " (from history)" : " (initial)");
   }
   var aiTimer = null;
   // Live cache of active runs, pushed from main on every start/stop — also
@@ -3136,7 +3136,7 @@ const BRIEF = {
     var mm = Math.floor(elapsed / 60), ss = Math.floor(elapsed % 60);
     return el("div", "ai-popup-row-wrap",
       '<div class="ai-popup-row">' +
-        '<span class="ai-popup-label">' + md(AI_LABELS[r.mode] || "AI მუშაობს…") + '</span>' +
+        '<span class="ai-popup-label">' + md(AI_LABELS[r.mode] || "The AI is working…") + '</span>' +
         '<span class="ai-popup-time">' + mm + ":" + (ss < 10 ? "0" : "") + ss + '</span>' +
       '</div>' +
       '<div class="ai-bar"><div class="ai-bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>' +
@@ -3147,7 +3147,7 @@ const BRIEF = {
     aiPopup.innerHTML = "";
     aiRunsState.slice(0, 3).forEach(function (r) { aiPopup.appendChild(aiPopupRow(r)); });
     if (aiRunsState.length > 3) {
-      aiPopup.appendChild(el("div", "ai-popup-more", "+" + (aiRunsState.length - 3) + " კიდევ მიმდინარეობს"));
+      aiPopup.appendChild(el("div", "ai-popup-more", "+" + (aiRunsState.length - 3) + " more running"));
     }
   }
 

@@ -623,7 +623,7 @@ ipcMain.handle('path:dirInfo', (ev, p) => {
 ipcMain.handle('dialog:pickFolder', async () => {
   const r = await dialog.showOpenDialog(win, {
     properties: ['openDirectory'],
-    title: 'აირჩიე ფოლდერი ტასკზე მისაბმელად'
+    title: 'Pick a folder to link to the task'
   });
   return (r.canceled || !r.filePaths.length) ? null : r.filePaths[0];
 });
@@ -809,12 +809,12 @@ function parseUsage(logFile, startedAt) {
 
 // Georgian, because every string the user reads in this app is Georgian.
 const WARN_TEXT = [
-  [/model wrote no output file/i, 'AI-მ პასუხის ფაილი საერთოდ არ ჩაწერა — ცვლილება არ შენახულა'],
-  [/output file is not valid JSON/i, 'AI-ს პასუხი გატეხილი JSON იყო — ვერ ჩაიწერა'],
-  [/summary file is not valid JSON/i, 'AI-ს შედეგის ფაილი გატეხილი JSON იყო'],
-  [/patch apply failed/i, 'დაფის ცვლილება ვერ დაედო kanban.json-ს'],
-  [/merge failed/i, 'AI-ს პასუხის ჩაწერა ჩავარდა'],
-  [/comment ack failed/i, 'კომენტარზე პასუხის მონიშვნა ჩავარდა']
+  [/model wrote no output file/i, 'The AI never wrote its answer file - nothing was saved'],
+  [/output file is not valid JSON/i, 'The AI answered with broken JSON - it could not be saved'],
+  [/summary file is not valid JSON/i, 'The AI result file was broken JSON'],
+  [/patch apply failed/i, 'The board change could not be applied to kanban.json'],
+  [/merge failed/i, 'Saving the AI answer failed'],
+  [/comment ack failed/i, 'Marking the comment as answered failed']
 ];
 
 function warnText(line) {
@@ -826,18 +826,18 @@ function warnText(line) {
    level:  info (no toast) | warn (yellow toast) | error (red toast) */
 function classifyRun(run, exitCode, usage) {
   const late = Math.round((Date.now() - run.startedAt) / 1000) > lateAfterSec(run);
-  if (run.killed) return { status: 'killed', level: 'info', message: 'პროცესი შენ გათიშე.' };
+  if (run.killed) return { status: 'killed', level: 'info', message: 'You stopped this run.' };
   if (run.timedOut) {
     return {
       status: 'timeout', level: 'error',
-      message: 'AI ' + Math.round(timeoutSec(run.mode) / 60) + ' წუთში ვერ დაასრულა და იძულებით გაითიშა.',
+      message: 'The AI did not finish within ' + Math.round(timeoutSec(run.mode) / 60) + ' minutes and was stopped.',
       detail: 'timeout after ' + timeoutSec(run.mode) + 's'
     };
   }
   if (!usage.hasLog || usage.stale) {
     return {
       status: 'failed', level: 'error',
-      message: 'AI საერთოდ ვერ გაეშვა — claude CLI არ დაწერა ლოგი. შეამოწმე რომ claude დაინსტალირებულია.',
+      message: 'The AI never started - the claude CLI wrote no log. Check that claude is installed.',
       detail: usage.stale ? 'log file is older than the run (script exited before writing)' : 'log file missing'
     };
   }
@@ -850,21 +850,21 @@ function classifyRun(run, exitCode, usage) {
   if (fatal) {
     return {
       status: 'failed', level: 'error',
-      message: 'AI ვერ გაეშვა: ' + fatal[1].trim(),
+      message: 'The AI could not start: ' + fatal[1].trim(),
       detail: usage.text.slice(0, 800)
     };
   }
   if (exitCode) {
     return {
       status: 'failed', level: 'error',
-      message: 'AI სკრიპტი შეცდომით დასრულდა (კოდი ' + exitCode + ').',
+      message: 'The AI script exited with an error (code ' + exitCode + ').',
       detail: usage.text.slice(-800)
     };
   }
   if (!usage.result) {
     return {
       status: 'failed', level: 'error',
-      message: 'AI-მ პასუხი არ დააბრუნა — გაშვება შუაზე გაწყდა.',
+      message: 'The AI returned no answer - the run broke off midway.',
       detail: usage.text.slice(-800)
     };
   }
@@ -873,13 +873,13 @@ function classifyRun(run, exitCode, usage) {
     if (sub === 'error_max_turns') {
       return {
         status: 'incomplete', level: 'error',
-        message: 'AI ტურების ლიმიტს (' + (usage.result.num_turns || '?') + ') მიაღწია და დავალება ბოლომდე ვერ მიიყვანა.',
+        message: 'The AI hit its turn limit (' + (usage.result.num_turns || '?') + ') and could not finish the job.',
         detail: (usage.result.errors || []).join('; ')
       };
     }
     return {
       status: 'failed', level: 'error',
-      message: 'AI შეცდომით დასრულდა: ' + (sub || 'უცნობი შეცდომა') + '.',
+      message: 'The AI ended with an error: ' + (sub || 'unknown error') + '.',
       detail: (usage.result.errors || []).join('; ') || usage.text.slice(-500)
     };
   }
@@ -894,15 +894,15 @@ function classifyRun(run, exitCode, usage) {
   if (usage.outputTokens > 0 && usage.outputTokens < 60) {
     return {
       status: 'thin', level: 'warn',
-      message: 'AI-ს პასუხი საეჭვოდ მოკლეა (' + usage.outputTokens + ' output ტოკენი) — შეიძლება არასრული იყოს.',
+      message: 'The AI answer is suspiciously short (' + usage.outputTokens + ' output tokens) - it may be incomplete.',
       detail: 'outputTokens=' + usage.outputTokens
     };
   }
   if (late) {
     return {
       status: 'ok', level: 'warn',
-      message: 'AI დაასრულა, მაგრამ მოსალოდნელზე ბევრად დიდხანს (' +
-        Math.round((Date.now() - run.startedAt) / 1000) + ' წმ).',
+      message: 'The AI finished, but far slower than expected (' +
+        Math.round((Date.now() - run.startedAt) / 1000) + ' s).',
       detail: 'expected ~' + ((run.est && run.est.durationSec) || '?') + 's'
     };
   }
@@ -916,7 +916,7 @@ function reportSpawnFailure(run, err) {
     id: run.id, at: new Date().toISOString(), start: new Date(run.startedAt).toISOString(),
     mode: run.mode, taskId: run.taskId || null, status: 'failed', level: 'error',
     durationSec: Math.round((Date.now() - run.startedAt) / 1000),
-    message: 'AI პროცესი ვერ გაეშვა (powershell): ' + ((err && err.message) || 'უცნობი შეცდომა'),
+    message: 'The AI process could not start (powershell): ' + ((err && err.message) || 'unknown error'),
     detail: (err && err.stack) || '', logFile: run.logFile
   };
   try { fs.appendFileSync(AI_RUNS_FILE, JSON.stringify(entry) + '\n', 'utf8'); } catch (e) {}
@@ -982,8 +982,8 @@ function runWatchdog() {
         id: run.id, at: new Date().toISOString(), start: new Date(run.startedAt).toISOString(),
         mode: run.mode, taskId: run.taskId || null, status: 'slow', level: 'warn',
         durationSec: Math.round(elapsed),
-        message: 'AI იგვიანებს — ' + Math.round(elapsed) + ' წმ გავიდა, მოსალოდნელი იყო ~' +
-          ((run.est && run.est.durationSec) || '?') + ' წმ. ისევ მუშაობს.',
+        message: 'The AI is running late - ' + Math.round(elapsed) + ' s so far, expected about ' +
+          ((run.est && run.est.durationSec) || '?') + ' s. Still working.',
         detail: 'still running', logFile: run.logFile
       });
     }
@@ -1002,8 +1002,8 @@ ipcMain.handle('ai:problems', () => readProblems().slice(-60).reverse());
    points at, so a broken run can be diagnosed without opening the app. */
 ipcMain.handle('ai:openDiagnostics', () => {
   const problems = readProblems().slice(-25).reverse();
-  const parts = ['=== DailyBrief AI დიაგნოსტიკა · ' + new Date().toISOString() + ' ===', ''];
-  if (!problems.length) parts.push('(პრობლემა არ დაფიქსირებულა)');
+  const parts = ['=== DailyBrief AI diagnostics - ' + new Date().toISOString() + ' ===', ''];
+  if (!problems.length) parts.push('(no problems recorded)');
   const seen = new Set();
   problems.forEach((p) => {
     parts.push('--- ' + p.at + ' · ' + p.mode + ' · ' + p.status + ' (' + p.level + ') · run ' + p.id +
@@ -1015,12 +1015,12 @@ ipcMain.handle('ai:openDiagnostics', () => {
   problems.forEach((p) => {
     if (!p.logFile || seen.has(p.logFile)) return;
     seen.add(p.logFile);
-    parts.push('=== LOG ' + path.basename(p.logFile) + ' (ბოლო 4000 სიმბოლო) ===');
+    parts.push('=== LOG ' + path.basename(p.logFile) + ' (last 4000 characters) ===');
     try { parts.push(fs.readFileSync(p.logFile, 'utf8').slice(-4000)); }
-    catch (e) { parts.push('(ლოგი აღარ არსებობს)'); }
+    catch (e) { parts.push('(the log no longer exists)'); }
     parts.push('');
   });
-  parts.push('=== ბოლო 20 გაშვება (ai-runs.jsonl) ===');
+  parts.push('=== last 20 runs (ai-runs.jsonl) ===');
   readRuns().slice(-20).forEach((r) => parts.push(JSON.stringify(r)));
   // BOM on purpose: this file is opened in the user's text editor.
   fs.writeFileSync(AI_DIAG_FILE, '﻿' + parts.join('\r\n'), 'utf8');
@@ -1054,26 +1054,26 @@ ipcMain.handle('ai:openContext', () => {
     ask: 'prompt-ask.md', ideas: 'prompt-ideas.md', execute: 'prompt-execute.md'
   };
   const pf = promptFiles[mode] || 'prompt-check.md';
-  const parts = ['=== რეჟიმი: ' + mode + ' ===', ''];
+  const parts = ['=== mode: ' + mode + ' ===', ''];
   parts.push('=== PROMPT (' + pf + ') ===');
   try { parts.push(fs.readFileSync(path.join(CORE_DIR, pf), 'utf8')); }
-  catch (e) { parts.push('(ფაილი ვერ მოიძებნა)'); }
+  catch (e) { parts.push('(file not found)'); }
   if (mode === 'execute') {
     // No digest file: the brief is assembled from the task card itself and
     // handed to the model on stdin, inside the project folder.
-    parts.push('', '=== რისგან შედგება ბრიფი ===',
-      'ტასკის სათაური · აღწერა · ჩეკლისტი · ბოლო კომენტარები · მიბმული ფოლდერი · branch');
+    parts.push('', '=== what the brief is built from ===',
+      'task title - description - checklist - latest comments - linked folder - branch');
   } else if (mode !== 'full' && mode !== 'replan') {
     // ask/ideas keep their own digest files so a question and a check that
     // happen to share a run id can never overwrite each other.
     const dPrefix = (mode === 'ask' || mode === 'ideas') ? 'ask-digest-' : 'check-digest-';
     const digestName = runId ? `${dPrefix}${runId}.json` : 'check-digest.json';
-    parts.push('', '=== ' + digestName + ' — ზუსტად ეს მიეწოდა AI-ს ===');
+    parts.push('', '=== ' + digestName + ' - exactly what the AI was given ===');
     try { parts.push(fs.readFileSync(path.join(DATA, digestName), 'utf8')); }
-    catch (e) { parts.push('(digest ჯერ არ არსებობს)'); }
+    catch (e) { parts.push('(no digest yet)'); }
   } else {
-    parts.push('', '=== წყარო ფაილები, რომლებსაც AI კითხულობს ===',
-      'GOALS.md · STATE.md · PROGRESS.md · top-dirs.txt · snapshots/ (ბოლო 3 დღე) · briefings/ (ბოლო 1) · kanban.json');
+    parts.push('', '=== source files the AI reads ===',
+      'GOALS.md - STATE.md - PROGRESS.md - top-dirs.txt - snapshots/ (last 3 days) - briefings/ (last 1) - kanban.json');
   }
   const out = path.join(DATA, 'last-ai-context.txt');
   // BOM on purpose: this file is for the user's text editor.
@@ -1208,7 +1208,7 @@ function runExecute(taskId) {
 
 ipcMain.handle('task:execute', (ev, taskId) => runExecute(taskId));
 
-/* A comment can order the work itself ("გააკეთე"), not just a re-plan. The
+/* A comment can order the work itself ("do it"), not just a re-plan. The
    board run has no tools for that, so it writes execute-request.json and we
    pick it up here, the moment that run exits. */
 function consumeExecuteRequest() {
@@ -1449,11 +1449,11 @@ function setUpdateState(status, extra) {
 }
 
 function initUpdater() {
-  if (!app.isPackaged) { setUpdateState('dev', { message: 'განახლება მხოლოდ დაინსტალირებულ ვერსიაშია' }); return; }
+  if (!app.isPackaged) { setUpdateState('dev', { message: 'Updates are only available in the installed build' }); return; }
   try {
     autoUpdater = require('electron-updater').autoUpdater;
   } catch (e) {
-    setUpdateState('error', { message: 'electron-updater ვერ ჩაიტვირთა' });
+    setUpdateState('error', { message: 'electron-updater failed to load' });
     return;
   }
   autoUpdater.autoDownload = true;

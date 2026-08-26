@@ -1,10 +1,10 @@
 {
-  "autoBound": "ავტომატურად მიება ფოლდერი:",
-  "commentApplied": "შენი კომენტარი გათვალისწინებულია.",
-  "commentFailed": "კომენტარი ვერ დამუშავდა — სცადე თავიდან.",
-  "briefTitle": "დღიური ბრიფინგი",
-  "briefFocus": "დღეს რას დაუთმო დრო",
-  "briefWarnings": "გაფრთხილებები",
-  "briefRecap": "შეჯამება",
-  "briefAssessment": "გზა სწორია?"
+  "autoBound": "folder linked automatically:",
+  "commentApplied": "your comment has been taken into account.",
+  "commentFailed": "the comment could not be processed - try again.",
+  "briefTitle": "Daily brief",
+  "briefFocus": "Where today goes",
+  "briefWarnings": "Warnings",
+  "briefRecap": "Recap",
+  "briefAssessment": "Is this the right road?"
 }

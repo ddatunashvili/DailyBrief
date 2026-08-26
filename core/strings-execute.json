@@ -1,9 +1,9 @@
 {
-  "noTask": "ტასკი ვერ მოიძებნა.",
-  "noDir": "ამ ტასკს ფოლდერი არ აქვს მიბმული — შესრულება შეუძლებელია. მიაბი ფოლდერი და თავიდან სცადე.",
-  "noGit": "ეს ფოლდერი git-რეპო არ არის. კოდს არ შევეხები, რადგან უკან დაბრუნების გზა არ იქნებოდა.",
-  "branchNo": "branch-ზე გადასვლა ვერ მოხერხდა — შესრულება შეჩერდა, ფაილებს არაფერი დაემართა.",
-  "noSummary": "შესრულება დასრულდა, მაგრამ ანგარიში არ დაწერილა — ნახე diff VS Code-ის Source Control-ში.",
-  "noteHead": "შესრულდა",
-  "noteFiles": "შეცვლილი ფაილი"
+  "noTask": "Task not found.",
+  "noDir": "This task has no folder linked, so it cannot be carried out. Link a folder and try again.",
+  "noGit": "This folder is not a git repository. The code is left alone, because there would be no way back.",
+  "branchNo": "Switching branch failed - the run stopped, nothing happened to your files.",
+  "noSummary": "The run finished but wrote no report - read the diff in VS Code's Source Control.",
+  "noteHead": "Carried out",
+  "noteFiles": "Changed file"
 }

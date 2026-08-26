@@ -1,7 +1,7 @@
-ერთადერთი დავალება: გამოაქვეყნე ფაილი Artifact ხელსაწყოთი ზუსტად ამ პარამეტრებით და დაასრულე:
+Your only job: publish the file with the Artifact tool using exactly these parameters, then stop:
 - file_path: {{FILE}}
-- url: {{URL}} (აუცილებელია — უამისოდ ახალი ბმული შეიქმნება)
+- url: {{URL}} (required — without it a new link is created)
 - favicon: 📋
-- description: დღიური ბრიფინგი — ამოცანები, კანბანი და ანალიტიკა
+- description: Daily brief — tasks, kanban and analytics
 
-ფაილი არ წაიკითხო, არაფერი შეცვალო, სხვა ხელსაწყო არ გამოიძახო. მხოლოდ ერთი Artifact გამოძახება.
+Do not read the file, do not change anything, do not call another tool. One Artifact call, nothing else.
