@@ -29,5 +29,6 @@ Rules:
 - Do not put closed tasks' work back into the new plan — one line at the end of `recap` at most. The whole plan covers current work only.
 - Draw a next step out of something closed only when work genuinely remains in that direction; if every task is closed, the direction is finished — do not plan it and do not create a similar task.
 - Spread the remaining tasks over the rest of the day and recount the `weight`s (the main ones summing to 100). `date` and `dateLabel` stay as they are.
+- **Absence is not evidence.** You read one digest and no source file, and the digest carries commit *subjects* rather than code. Never warn that something is missing, unguarded or untested because the digest does not mention it — the digest was never going to mention it. A `warnings` entry names something present in the digest, or it is not written.
 - Do not change the `done` field, do not touch comments, restore nothing from the archive.
 - Do not write the `state` and `goals` fields at all in this mode — the full morning run refreshes those.

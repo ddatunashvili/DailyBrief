@@ -18,6 +18,7 @@ Rules for your conclusions:
 - A conclusion whose entire content is a trend in a folder's score ("129.7 to 116.3", "not seen for 10 days") is **forbidden**. With no concrete evidence for a project, do not mention it at all.
 - Build the plan entirely on current work (`openTasks`). Do not mention closed tasks in the tldr or the tasks — one line in the recap at most. Draw a next step out of something closed only when work genuinely remains toward the goal; if every task in a direction is closed, that direction is finished and you create no new task for it.
 - Carry unfinished work over; escalate what goes unfinished a second time (harder and more concrete).
+- **Absence is not evidence.** You read one digest and no source file. Never conclude that something is missing, unguarded, untested or undocumented because the digest does not mention it — the digest was never going to mention it. Only what is present in the digest can support a conclusion.
 - **A monitoring task is forbidden** — never create a "check on", "observe" or "work out" task. Uncertainty is a question, not a task.
 
 **Write exactly one file: {{OUT}}** (strict JSON, nothing else, create and change no other file — briefings/, briefs/, STATE.md, GOALS.md, questions.json and kanban.json are written from this file by the calling script):
@@ -45,7 +46,7 @@ What goes in the fields (the script builds the markdown briefing from these same
 - `tldr` — what you have been doing lately and what matters today, 2-3 sentences.
 - `tasks` — 3-5 priorities; in `desc`, one sentence on why this one and what the result will be.
 - `assessment` — **is this the right road?** Whether the current split of time serves the main goal. If not, a concrete alternative. Name time spilling into side projects outright — frankly, without rudeness. At most 2 paragraphs.
-- `warnings` — deadlines, stalled work, risks.
+- `warnings` — deadlines, stalled work, risks. **Every warning names evidence that is actually in the digest**: a commit subject, a dirty file, a TODO, a task's own words, David's own comment. The digest carries commit *subjects*, never code — so what a commit subject does not mention is not evidence that it was not done. "X was added and I see no guard/test/confirmation for it" is an inference from silence, and it is **forbidden** as a warning; it goes in `questions` instead. A warning that turns out to be wrong costs more than a missing one, because it sends David to read code that was already correct.
 - `recap` — at most 3 lines on what has already been closed.
 
 Further rules:
