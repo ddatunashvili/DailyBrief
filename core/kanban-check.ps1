@@ -13,7 +13,7 @@
 # trajectory instead of per-task activity. -NewTasksOnly is the board-wide
 # companion of the sharded check: no per-task evidence, only "is there a busy
 # working folder no task covers yet" - and when there is none it never calls
-# the model at all. -RunId lets several of these run
+# the model at all. -DigestOnly stops after writing the digest. -RunId lets several of these run
 # at once (main.js assigns one per concurrent AI process) without their
 # digest/patch/log files colliding.
 # ASCII-only on purpose (PS 5.1 encoding).
@@ -24,7 +24,11 @@ param(
     [switch]$Generate,
     [switch]$Command,
     [switch]$NewTasksOnly,
-    [string]$RunId = ''
+    [string]$RunId = '',
+    # Build and write the digest, then stop: no model call, no write to
+    # kanban.json or scans\ (a relink is only reported). For tests and for
+    # looking at exactly what a check would send.
+    [switch]$DigestOnly
 )
 
 # Force real UTF-8 as early as possible, before anything else runs, so no
@@ -47,6 +51,8 @@ $scoped = $false   # set by the check branch; Generate/Command are never "scoped
 # script decides it instead of asking.
 $evidenceIds = @{}
 $doneNeedsEvidence = $false
+$subEvidence = @{}       # task id -> subtask texts with evidence in this digest
+$missingInDigest = @{}   # task id -> linked dir reported as missing to the model
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
 function Norm-Title([string]$s) { return ($s + '').Trim().ToLowerInvariant() }
@@ -69,7 +75,7 @@ function Task-Keywords($t) {
     $text = ($parts -join ' ')
     $kw = New-Object System.Collections.Generic.List[string]
     $pats = @(
-        '[A-Za-z][A-Za-z0-9_\-]{2,}\.(?:blade\.php|tsx|ts|jsx|js|php|vue|py|go|rb|cs|java|kt|scss|css|json|md|ps1|sql|yaml|yml)',
+        '[A-Za-z][A-Za-z0-9_\-]{2,}\.(?:blade\.php|tsx|ts|jsx|js|mjs|cjs|php|vue|svelte|py|go|rb|cs|java|kt|scss|css|html|json|md|ps1|sh|sql|toml|yaml|yml)',
         '\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b',
         '\b[a-z][a-z0-9]*_[a-z0-9_]{2,}\b'
     )
@@ -146,11 +152,16 @@ if (Test-Path $patchPath) { Remove-Item $patchPath -Force }
 try {
     . (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
 } catch {
-    [IO.File]::WriteAllText($log, ('[fatal] ' + $_.Exception.Message), $utf8NoBom)
-    exit 3
+    # A digest-only run never calls the model, so a missing CLI is no reason
+    # to stop it.
+    if (-not $DigestOnly) {
+        [IO.File]::WriteAllText($log, ('[fatal] ' + $_.Exception.Message), $utf8NoBom)
+        exit 3
+    }
 }
 . (Join-Path $PSScriptRoot 'claude-run.ps1')   # Invoke-ClaudeLean
 . (Join-Path $PSScriptRoot 'lock.ps1')         # Invoke-WithBoardLock
+. (Join-Path $PSScriptRoot 'roots.ps1')        # Get-WorkRoots (dead-link relink)
 
 # Every read-modify-write of kanban.json runs inside Invoke-WithBoardLock
 # (the board.lock file main.js shares) and re-reads the board inside it. Lock
@@ -166,7 +177,7 @@ $kanbanPath = Join-Path $base 'kanban.json'
 # An empty board is a normal state (fresh account, first run), not a crash.
 # This used to die inside Get-Content before the log existed, which the app
 # then reported as "claude CLI wrote no log".
-if (-not (Test-Path $kanbanPath)) {
+if (-not (Test-Path $kanbanPath) -and -not $DigestOnly) {
     $empty = [pscustomobject]@{ tasks = @(); archive = @() }
     [IO.File]::WriteAllText($kanbanPath, ($empty | ConvertTo-Json -Depth 6), $utf8NoBom)
 }
@@ -297,7 +308,10 @@ foreach ($t in @($kanban.tasks | Where-Object { -not $_.done })) {
     if (-not $guess -or -not (Test-Path $guess)) { continue }
     $guesses[[string]$t.id] = $guess
 }
-if ($guesses.Count -gt 0) {
+if ($guesses.Count -gt 0 -and $DigestOnly) {
+    # Reported, not written: a digest-only run leaves the board alone.
+    foreach ($gk in @($guesses.Keys)) { Add-Content $log ('[info] would auto-link ' + $gk + ' -> ' + $guesses[$gk]) }
+} elseif ($guesses.Count -gt 0) {
     $script:newlyBound = @()
     Invoke-WithBoardLock {
         $fresh = Read-Kanban
@@ -371,6 +385,242 @@ function Similar-Title([string]$a, [string]$b) {
     $common = @($ta | Where-Object { $tb -contains $_ }).Count
     $union = @(@($ta) + @($tb) | Select-Object -Unique).Count
     return ($union -gt 0 -and ($common / $union) -ge 0.75)
+}
+
+# ---------- git evidence helpers ----------
+# Under $ErrorActionPreference='Stop' PS 5.1 turns ANY stderr line of a native
+# command into a terminating error - one "unknown revision" from a rewritten
+# baseline threw away the task's whole scanDiff. Here git runs with Continue
+# and the exit code is the only success signal.
+$script:gitExit = 0
+function Invoke-Git([string]$dir, [string[]]$gitArgs) {
+    $ErrorActionPreference = 'Continue'
+    $out = @(& git -C $dir @gitArgs 2>$null)
+    $script:gitExit = $LASTEXITCODE
+    return @($out | ForEach-Object { [string]$_ })
+}
+
+function Test-GitCommit([string]$dir, [string]$sha) {
+    if (-not $sha) { return $false }
+    $null = Invoke-Git $dir @('cat-file', '-e', ($sha + '^{commit}'))
+    return ($script:gitExit -eq 0)
+}
+
+# porcelain lines carry a 3-char status prefix (" M ", "?? "); noise is judged
+# on the path alone or "dist/" never matches its anchor.
+function Porcelain-Path([string]$line) {
+    if ($line.Length -gt 3) { return $line.Substring(3).Trim('"') }
+    return $line
+}
+
+$script:gitWinCache = @{}
+$script:branchCache = @{}
+# Commits that reached ANY local branch since a baseline, limited to this
+# folder's own subtree. Why each part:
+#   --branches     work on a feature branch (or execute's dailybrief/<id>
+#                  branch) is invisible to a plain HEAD range.
+#   --not <sha>    when the baseline commit still exists; after an amend,
+#                  rebase or reset it does not, and "<sha>..HEAD" used to fail
+#                  silently forever - then only the baseline's timestamp
+#                  (--since, always applied) bounds the window.
+#   -- . --relative  a task linked to app\ inside a bigger repo must not see
+#                  the commits of its sibling folders.
+# Noise is dropped per commit BEFORE anything is capped: one build commit
+# rewriting 50 dist\ files must not push the real source file out.
+function Get-GitWindow([string]$dir, [string]$sha, [string]$since) {
+    $key = ($dir + '|' + $sha + '|' + $since).ToLowerInvariant()
+    if ($script:gitWinCache.ContainsKey($key)) { return $script:gitWinCache[$key] }
+    $mode = 'none'
+    $sinceArg = ''
+    $dt = [datetime]::MinValue
+    if ($since -and [datetime]::TryParse($since, [ref]$dt)) { $sinceArg = '--since=' + $dt.ToString('yyyy-MM-ddTHH:mm:ss') }
+    # The time bound applies in sha mode too: "--branches --not <sha>" alone
+    # would count every commit of an old unmerged branch as new, forever,
+    # because the baseline only covers the history of the branch it was on.
+    $hasSha = Test-GitCommit $dir $sha
+    if ($hasSha) { $mode = 'sha' } elseif ($sinceArg) { $mode = 'since' }
+    $rangeArgs = @()
+    if ($sinceArg) { $rangeArgs += $sinceArg }
+    $negArgs = @()
+    if ($hasSha) { $negArgs = @($sha) }
+    if (-not $script:branchCache.ContainsKey($dir)) {
+        $script:branchCache[$dir] = [string](@(Invoke-Git $dir @('rev-parse', '--abbrev-ref', 'HEAD')) | Select-Object -First 1)
+    }
+    $cur = [string]$script:branchCache[$dir]
+    $commits = New-Object System.Collections.Generic.List[object]
+    $files = New-Object System.Collections.Generic.List[string]
+    if ($mode -ne 'none') {
+        $rs = [string][char]0x1e; $us = [string][char]0x1f
+        $logArgs = @('log', '--branches', '--source', '-n', '200', '--name-only', '--relative',
+                     '--date=format:%Y-%m-%d %H:%M', '--format=%x1e%H%x1f%h %ad %s%x1f%S') + $rangeArgs
+        if ($negArgs.Count -gt 0) { $logArgs += @('--not') + $negArgs }
+        $logArgs += @('--', '.')
+        $cur1 = $null
+        foreach ($ln in (Invoke-Git $dir $logArgs)) {
+            if ($ln.StartsWith($rs)) {
+                $p = $ln.Substring(1).Split($us)
+                $src = ''
+                if ($p.Count -ge 3) { $src = ([string]$p[2]) -replace '^refs/heads/', '' }
+                $line = [string]$p[1]
+                # Only a commit seen through ANOTHER branch is labelled: the
+                # current one is the default and costs tokens on every line.
+                if ($src -and $src -ne $cur) { $line = $line + ' [' + $src + ']' }
+                $cur1 = @{ hash = [string]$p[0]; line = $line; files = (New-Object System.Collections.Generic.List[string]) }
+                $commits.Add($cur1)
+            } elseif ($ln.Trim() -and $cur1) {
+                $cur1.files.Add($ln.Trim())
+            }
+        }
+    }
+    $kept = New-Object System.Collections.Generic.List[object]
+    foreach ($c in $commits) {
+        $real = @($c.files | Where-Object { -not (Is-Noise $_) })
+        # A commit that touched only generated files says nothing about a task.
+        if ($c.files.Count -gt 0 -and $real.Count -eq 0) { continue }
+        $c.real = $real
+        $kept.Add($c)
+        foreach ($f in $real) { if (-not $files.Contains($f)) { $files.Add($f) } }
+    }
+    $win = @{ mode = $mode; rangeArgs = $rangeArgs; negArgs = $negArgs; commits = $kept.ToArray(); files = $files.ToArray() }
+    $script:gitWinCache[$key] = $win
+    return $win
+}
+
+# Commits that belong to one task no matter what words they use: everything
+# execute.ps1 committed on the task's own branch (and only there - not what
+# that branch inherited from main), and any commit whose message names the
+# task id.
+function Get-TaskOwnCommits([string]$dir, $win, [string]$taskId) {
+    $own = @{}
+    if ($win.mode -eq 'none' -or -not $taskId) { return $own }
+    $br = 'dailybrief/' + $taskId
+    $null = Invoke-Git $dir @('rev-parse', '--verify', '--quiet', ('refs/heads/' + $br))
+    if ($script:gitExit -eq 0) {
+        $a = @('log', $br, '--format=%H') + $win.rangeArgs + @('--not', ('--exclude=' + $br), '--branches') + $win.negArgs + @('--', '.')
+        foreach ($h in (Invoke-Git $dir $a)) { if ($h) { $own[$h] = $true } }
+    }
+    $g = @('log', '--branches', '-i', '-F', ('--grep=' + $taskId), '--format=%H') + $win.rangeArgs
+    if ($win.negArgs.Count -gt 0) { $g += @('--not') + $win.negArgs }
+    $g += @('--', '.')
+    foreach ($h in (Invoke-Git $dir $g)) { if ($h) { $own[$h] = $true } }
+    return $own
+}
+
+# ---------- dead-link relink ----------
+# Projects move (OneDrive\Desktop -> G:\Desktop). A task still pointing at the
+# old path collected no evidence and said nothing, forever. Look for the moved
+# folder by its name and prove it is the same repo before relinking: same
+# root commit (and the same subpath inside it), or - for scan files written
+# before rootCommit existed - a repo that still contains the baseline commit.
+$script:leafIndex = $null
+function Add-LeafDir($idx, [string]$d) {
+    $k = (Split-Path $d -Leaf).ToLowerInvariant()
+    if (-not $idx.ContainsKey($k)) { $idx[$k] = New-Object System.Collections.Generic.List[string] }
+    foreach ($e in $idx[$k]) { if ($e -ieq $d) { return } }
+    $idx[$k].Add($d)
+}
+
+function Get-LeafIndex {
+    if ($script:leafIndex) { return $script:leafIndex }
+    $idx = @{}
+    foreach ($p in $projects) {
+        $pd = [string]$p.dir
+        if ($pd -and (Test-Path -LiteralPath $pd -PathType Container)) { Add-LeafDir $idx $pd.TrimEnd([char]92) }
+    }
+    # Depth 3 under each work root, skipping trees that never hold a project
+    # root of their own - node_modules alone can hold thousands of folders.
+    $skip = @('node_modules', 'vendor', 'dist', 'build', 'out', '__pycache__', 'venv', 'bin', 'obj', 'target', 'coverage')
+    foreach ($r in (Get-WorkRoots)) {
+        $queue = New-Object System.Collections.Generic.Queue[object]
+        $queue.Enqueue(@($r, 0))
+        while ($queue.Count -gt 0) {
+            $item = $queue.Dequeue()
+            $kids = @()
+            try { $kids = [IO.Directory]::GetDirectories([string]$item[0]) } catch { continue }
+            foreach ($kd in $kids) {
+                $leaf = Split-Path $kd -Leaf
+                if ($leaf.StartsWith('.') -or $leaf.StartsWith('$') -or $skip -contains $leaf.ToLowerInvariant()) { continue }
+                Add-LeafDir $idx $kd
+                if ([int]$item[1] + 1 -lt 3) { $queue.Enqueue(@($kd, ([int]$item[1] + 1))) }
+            }
+        }
+    }
+    $script:leafIndex = $idx
+    return $idx
+}
+
+$script:repoInfoCache = @{}
+function Get-RepoInfo([string]$dir) {
+    $k = $dir.ToLowerInvariant()
+    if ($script:repoInfoCache.ContainsKey($k)) { return $script:repoInfoCache[$k] }
+    $info = $null
+    $top = [string](@(Invoke-Git $dir @('rev-parse', '--show-toplevel')) | Select-Object -First 1)
+    if ($script:gitExit -eq 0 -and $top) {
+        $roots = @(Invoke-Git $dir @('rev-list', '--max-parents=0', 'HEAD'))
+        $info = @{ top = $top.Replace('/', [string][char]92).TrimEnd([char]92); roots = $roots }
+    }
+    $script:repoInfoCache[$k] = $info
+    return $info
+}
+
+$script:relinkCache = @{}
+# Returns the one folder the old one moved to, or '' when there is none or
+# more than one (a guess between two look-alikes is worse than asking).
+# Cached per old path: several tasks usually share one moved repo.
+function Find-MovedDir([string]$oldDir, $scan) {
+    $key = $oldDir.ToLowerInvariant()
+    if ($script:relinkCache.ContainsKey($key)) { return $script:relinkCache[$key] }
+    $leaf = (Split-Path $oldDir -Leaf).ToLowerInvariant()
+    $idx = Get-LeafIndex
+    $cands = @()
+    if ($idx.ContainsKey($leaf)) { $cands = @($idx[$leaf] | Where-Object { $_ -ine $oldDir }) }
+    $root = ''; $top = ''; $head = ''
+    if ($scan) {
+        if ($scan.PSObject.Properties['rootCommit']) { $root = [string]$scan.rootCommit }
+        if ($scan.PSObject.Properties['toplevel']) { $top = ([string]$scan.toplevel).TrimEnd([char]92) }
+        if ($scan.isGit) { $head = [string]$scan.head }
+    }
+    $sub = ''
+    if ($top -and $oldDir.StartsWith($top + [char]92, [StringComparison]::OrdinalIgnoreCase)) { $sub = $oldDir.Substring($top.Length + 1) }
+    if ($root) {
+        $cands = @($cands | Where-Object {
+            $ri = Get-RepoInfo $_
+            $ok = $false
+            if ($ri -and $ri.roots -contains $root) {
+                $want = $ri.top
+                if ($sub) { $want = $ri.top + [char]92 + $sub }
+                $ok = ($want -ieq $_.TrimEnd([char]92))
+            }
+            $ok
+        })
+    } elseif ($head) {
+        # Old scan files have no rootCommit. A repo that still holds the
+        # baseline commit is the same history; when none does (rewritten
+        # history), the name alone has to be unique.
+        $verified = @($cands | Where-Object { (Get-RepoInfo $_) -and (Test-GitCommit $_ $head) })
+        if ($verified.Count -gt 0) { $cands = $verified }
+    }
+    $res = ''
+    if ($cands.Count -eq 1) { $res = [string]$cands[0] }
+    $script:relinkCache[$key] = $res
+    return $res
+}
+
+function Read-Scan([string]$taskId) {
+    $sp = Join-Path $base ('scans\' + $taskId + '.json')
+    if (-not (Test-Path $sp)) { return $null }
+    try { return (([string](Get-Content $sp -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json) } catch { return $null }
+}
+
+function Write-Scan([string]$taskId, $scan) {
+    $sp = Join-Path $base ('scans\' + $taskId + '.json')
+    New-Item -ItemType Directory -Force (Split-Path $sp) | Out-Null
+    [IO.File]::WriteAllText($sp, ($scan | ConvertTo-Json -Depth 4), $utf8NoBom)
+}
+
+function Set-Prop($obj, [string]$name, $value) {
+    if ($obj.PSObject.Properties[$name]) { $obj.$name = $value }
+    else { $obj | Add-Member -NotePropertyName $name -NotePropertyValue $value }
 }
 
 if ($NewTasksOnly) {
@@ -502,16 +752,96 @@ if ($NewTasksOnly) {
     # discover-dirs Quick signal is useless for checks.
     $events = @(Get-RecentEvents)
 
-    $activeTasks = @($kanban.tasks | Where-Object { -not $_.done })
-    if ($TaskId) {
-        $activeTasks = @($activeTasks | Where-Object { $_.id -eq $TaskId })
-    } elseif ($idSet.Count -gt 0) {
+    function Select-ActiveTasks($kb) {
+        $at = @($kb.tasks | Where-Object { -not $_.done })
+        if ($TaskId) { $at = @($at | Where-Object { $_.id -eq $TaskId }) }
+        elseif ($idSet.Count -gt 0) { $at = @($at | Where-Object { $idSet -contains [string]$_.id }) }
+        return $at
+    }
+    $activeTasks = @(Select-ActiveTasks $kanban)
+    if ($idSet.Count -gt 0 -and $activeTasks.Count -eq 0) {
         # A picked set: the same per-task digest as a full check, only over these.
-        $activeTasks = @($activeTasks | Where-Object { $idSet -contains [string]$_.id })
-        if ($activeTasks.Count -eq 0) {
-            [IO.File]::WriteAllText($log, 'skipped: none of the picked tasks are active - zero AI tokens spent', $utf8NoBom)
-            exit 0
+        [IO.File]::WriteAllText($log, 'skipped: none of the picked tasks are active - zero AI tokens spent', $utf8NoBom)
+        exit 0
+    }
+
+    # ---------- dead links: find moved folders before looking for evidence ----------
+    # Only this run's own tasks: parallel shards each relink their own.
+    $relinks = New-Object System.Collections.Generic.List[object]
+    $missingDirs = @{}     # task id -> first linked dir that is gone and was not found
+    $scanDirOverride = @{} # task id -> new dir, for a digest-only run that writes nothing
+    foreach ($t in $activeTasks) {
+        if (-not ($t.PSObject.Properties['dirs'] -and $t.dirs)) { continue }
+        foreach ($dd in @($t.dirs)) {
+            $od = ([string]$dd).TrimEnd([char]92)
+            if (-not $od -or (Test-Path -LiteralPath $od)) { continue }
+            $sc = Read-Scan ([string]$t.id)
+            if ($sc -and ([string]$sc.dir).TrimEnd([char]92) -ine $od) { $sc = $null }
+            $nd = Find-MovedDir $od $sc
+            if ($nd) { $relinks.Add(@{ id = [string]$t.id; title = [string]$t.title; from = $od; to = $nd; scan = $sc }) }
+            elseif (-not $missingDirs.ContainsKey([string]$t.id)) { $missingDirs[[string]$t.id] = $od }
         }
+    }
+    foreach ($rl in $relinks) {
+        Add-Content $log ('[info] ' + $(if ($DigestOnly) { 'would relink ' } else { 'relinked ' }) + $rl.id + ': ' + $rl.from + ' -> ' + $rl.to)
+    }
+    if ($relinks.Count -gt 0 -and -not $DigestOnly) {
+        $moved = if ($STR.ContainsKey('folderMoved')) { $STR.folderMoved } else { 'linked folder moved:' }
+        Invoke-WithBoardLock {
+            $fresh = Read-Kanban
+            $changed = $false
+            foreach ($rl in $relinks) {
+                $ft = $fresh.tasks | Where-Object { $_.id -eq $rl.id } | Select-Object -First 1
+                if (-not $ft -or -not ($ft.PSObject.Properties['dirs'] -and $ft.dirs)) { continue }
+                $hit = $false
+                $nds = @(@($ft.dirs) | ForEach-Object {
+                    if (([string]$_).TrimEnd([char]92) -ieq $rl.from) { $hit = $true; $rl.to } else { [string]$_ }
+                })
+                if (-not $hit) { continue }   # the user re-pointed it meanwhile
+                $ft.dirs = @($nds | Select-Object -Unique)
+                $notes = @()
+                if ($ft.PSObject.Properties['aiNotes'] -and $ft.aiNotes) { $notes = @($ft.aiNotes) }
+                $notes += (New-Object PSObject -Property @{ text = ($moved + ' ' + $rl.from + ' -> ' + $rl.to); at = $now })
+                Set-Prop $ft 'aiNotes' @($notes | Select-Object -Last 10)
+                $changed = $true
+            }
+            if ($changed) { [IO.File]::WriteAllText($kanbanPath, ($fresh | ConvertTo-Json -Depth 10), $utf8NoBom) }
+            $script:kanban = $fresh
+        }
+        # Same repo history at a new path: the baselines' shas stay valid, so
+        # only the path changes and the evidence window is not reset.
+        foreach ($rl in $relinks) {
+            if ($rl.scan) { Set-Prop $rl.scan 'dir' $rl.to; Write-Scan $rl.id $rl.scan }
+        }
+        $activeTasks = @(Select-ActiveTasks $kanban)
+    } elseif ($relinks.Count -gt 0) {
+        foreach ($rl in $relinks) {
+            $scanDirOverride[$rl.id] = $rl.to
+            foreach ($t in $activeTasks) {
+                if ([string]$t.id -ne $rl.id) { continue }
+                $t.dirs = @(@($t.dirs) | ForEach-Object { if (([string]$_).TrimEnd([char]92) -ieq $rl.from) { $rl.to } else { [string]$_ } })
+            }
+        }
+    }
+    if ($missingDirs.Count -gt 0) {
+        # main.js turns "[warn]" lines into toasts: the user is the only one
+        # who knows where the folder went. Toast only a folder that went missing
+        # since the last note (scan's missingNoted), or every 5-hourly check
+        # repeats the same toast until the user fixes it.
+        $mtNew = @(); $mtOld = @()
+        foreach ($t in @($activeTasks | Where-Object { $missingDirs.ContainsKey([string]$_.id) })) {
+            $noted = ''
+            $sp = Join-Path $base ('scans\' + [string]$t.id + '.json')
+            if (Test-Path $sp) {
+                try {
+                    $sj = Get-Content $sp -Raw -Encoding UTF8 | ConvertFrom-Json
+                    if ($sj.PSObject.Properties['missingNoted']) { $noted = [string]$sj.missingNoted }
+                } catch { }
+            }
+            if ($noted -ieq [string]$missingDirs[[string]$t.id]) { $mtOld += [string]$t.title } else { $mtNew += [string]$t.title }
+        }
+        if ($mtNew.Count -gt 0) { Add-Content $log ('[warn] linked folder missing for ' + $mtNew.Count + ' task(s): ' + ($mtNew -join '; ')) }
+        if ($mtOld.Count -gt 0) { Add-Content $log ('[info] linked folder still missing for ' + $mtOld.Count + ' task(s): ' + ($mtOld -join '; ')) }
     }
 
     # How many live cards watch each folder. One card alone owns everything its
@@ -526,8 +856,13 @@ if ($NewTasksOnly) {
         }
     }
 
+    # Per task, the subtask texts that had evidence in THIS digest - the only
+    # ones the apply step lets the model tick.
+    $subEvidence = @{}
+    $missingInDigest = @{}
     $projCards = @{}
     $digestTasks = @(foreach ($t in $activeTasks) {
+        $tid = [string]$t.id
         $dirs = @()
         if ($t.PSObject.Properties['dirs'] -and $t.dirs) { $dirs = @($t.dirs) }
         $changes = @()
@@ -558,69 +893,98 @@ if ($NewTasksOnly) {
         $desc = [string]$t.desc
         if ($desc.Length -gt 200 -and -not $Replan) { $desc = $desc.Substring(0, 200) }
 
-        # Baseline diff from the folder scanner (git-aware, most precise signal).
+        # Baseline diffs from the folder scanner, two windows:
+        #   sinceCheck  (head/scannedAt)       what is new since the last check -> notes
+        #   sinceLinked (linkedHead/linkedAt)  everything since the task got its
+        #                                      folder -> done and subtask ticks
+        # The baseline moves after every check that touched the task, so a task
+        # finished over several days never showed enough at once to be closed.
         $scanDiff = $null
-        $commitDetail = @()
-        $scanPath = Join-Path $base ('scans\' + [string]$t.id + '.json')
+        $linked = $null
+        $linkCommits = @()
+        $linkFiles = @()
+        $dirtyPaths = @()
+        $ownHashes = @{}
+        $scan = $null
         if ($dirs.Count -gt 0) {
-            if (Test-Path $scanPath) {
+            $scan = Read-Scan $tid
+            if ($scan) {
                 try {
-                    $scan = Get-Content $scanPath -Raw -Encoding UTF8 | ConvertFrom-Json
                     $sdir = [string]$scan.dir
-                    if ($scan.isGit -and (Test-Path $sdir)) {
-                        $range = [string]$scan.head + '..HEAD'
-                        $newCommits = @(git -C $sdir log --oneline $range 2>$null | Select-Object -First 10 | ForEach-Object { [string]$_ })
-                        # "feat(billing): a bilingual invoice" names no file, so a
-                        # commit can only be tied to a task through what it touched.
-                        $commitDetail = @()
-                        foreach ($cl in $newCommits) {
-                            $h = ([string]$cl).Split(' ')[0]
-                            if (-not $h) { continue }
-                            $cf = @(git -C $sdir show --pretty=format: --name-only $h 2>$null |
-                                Where-Object { $_ } | Select-Object -First 40 | ForEach-Object { [string]$_ })
-                            $commitDetail += ,@{ line = [string]$cl; files = $cf }
-                        }
-                        $changedFiles = @(git -C $sdir diff --name-only $range 2>$null | Select-Object -First 15 | ForEach-Object { [string]$_ })
-                        $dirtyNow = @(git -C $sdir status --porcelain 2>$null | Select-Object -First 15 | ForEach-Object { [string]$_ })
+                    if ($scanDirOverride.ContainsKey($tid)) { $sdir = [string]$scanDirOverride[$tid] }
+                    # Files written before the linked baseline existed: their
+                    # oldest remembered point is the current one.
+                    $lHead = [string]$scan.head; $lAt = [string]$scan.scannedAt
+                    if ($scan.PSObject.Properties['linkedAt'] -and $scan.linkedAt) {
+                        $lAt = [string]$scan.linkedAt
+                        $lHead = if ($scan.PSObject.Properties['linkedHead']) { [string]$scan.linkedHead } else { '' }
+                    }
+                    if ($scan.isGit -and (Test-Path -LiteralPath $sdir)) {
+                        $chk = Get-GitWindow $sdir ([string]$scan.head) ([string]$scan.scannedAt)
+                        $lnk = Get-GitWindow $sdir $lHead $lAt
+                        $dirtyAll = @(Invoke-Git $sdir @('status', '--porcelain', '--', '.'))
+                        $dirtyReal = @($dirtyAll | Where-Object { -not (Is-Noise (Porcelain-Path $_)) })
+                        $dirtyPaths = @($dirtyReal | ForEach-Object { Porcelain-Path $_ })
+                        $curBranch = [string]$script:branchCache[$sdir]
                         $scanDiff = @{
-                            kind = 'git'; branch = [string]$scan.branch; sinceBaseline = [string]$scan.scannedAt
-                            newCommits = $newCommits; changedFiles = $changedFiles
-                            dirtyNow = $dirtyNow; dirtyBefore = $scan.dirtyCount
+                            kind = 'git'; branch = $curBranch; sinceBaseline = [string]$scan.scannedAt
+                            baseline = $chk.mode
+                            newCommits = @($chk.commits | Select-Object -First 25 | ForEach-Object { [string]$_.line })
+                            changedFiles = @($chk.files | Select-Object -First 30)
+                            dirtyNow = @($dirtyReal | Select-Object -First 20)
+                            dirtyBefore = $scan.dirtyCount
                         }
-                    } elseif ((-not $scan.isGit) -and (Test-Path $sdir)) {
+                        if ($dirtyAll.Count -ne $dirtyReal.Count) { $scanDiff.dirtyTotal = $dirtyAll.Count }
+                        $linkCommits = @($lnk.commits)
+                        $linkFiles = @($lnk.files)
+                        $ownHashes = Get-TaskOwnCommits $sdir $lnk $tid
+                        $linked = @{ since = $lAt; baseline = $lnk.mode; commitCount = $linkCommits.Count; fileCount = $linkFiles.Count }
+                    } elseif ((-not $scan.isGit) -and (Test-Path -LiteralPath $sdir)) {
                         $old = @{}
                         foreach ($line in @($scan.files)) {
                             $parts = ([string]$line).Split('|')
                             if ($parts.Count -ge 2) { $old[$parts[0]] = $parts[1] }
                         }
+                        $lDt = [datetime]::MinValue
+                        $hasL = [datetime]::TryParse($lAt, [ref]$lDt)
                         $newFiles = New-Object System.Collections.Generic.List[string]
                         $modFiles = New-Object System.Collections.Generic.List[string]
-                        Get-ChildItem $sdir -Recurse -File -ErrorAction SilentlyContinue |
+                        $sinceLink = New-Object System.Collections.Generic.List[string]
+                        Get-ChildItem -LiteralPath $sdir -Recurse -File -ErrorAction SilentlyContinue |
                             Where-Object { $_.FullName -notmatch 'node_modules|\\\.git|__pycache__|\\\.venv|\\dist\\|\\coverage\\|Cache' } |
                             Select-Object -First 2000 |
                             ForEach-Object {
                                 $rel = if ($_.FullName.Length -gt $sdir.Length + 1) { $_.FullName.Substring($sdir.Length + 1) } else { $_.Name }
+                                if (Is-Noise $rel) { return }
                                 $mt = $_.LastWriteTime.ToString('yyyy-MM-ddTHH:mm')
                                 if (-not $old.ContainsKey($rel)) { $newFiles.Add($rel) }
                                 elseif ($old[$rel] -ne $mt) { $modFiles.Add($rel) }
+                                # No commits to count from: a plain folder's
+                                # cumulative window is "written since linked".
+                                if ($hasL -and $_.LastWriteTime -ge $lDt) { $sinceLink.Add($rel) }
                             }
                         $scanDiff = @{
                             kind = 'files'; sinceBaseline = [string]$scan.scannedAt
                             newCount = $newFiles.Count; modifiedCount = $modFiles.Count
-                            newFiles = @($newFiles | Select-Object -First 10)
-                            modifiedFiles = @($modFiles | Select-Object -First 10)
+                            newFiles = @($newFiles | Select-Object -First 20)
+                            modifiedFiles = @($modFiles | Select-Object -First 20)
                         }
+                        $linkFiles = $sinceLink.ToArray()
+                        $linked = @{ since = $lAt; fileCount = $sinceLink.Count }
                     }
-                } catch { $scanDiff = $null }
+                } catch { $scanDiff = $null; Add-Content $log ('[info] scan diff failed for ' + $tid + ': ' + $_.Exception.Message + ' (line ' + $_.InvocationInfo.ScriptLineNumber + ')') }
             }
-            # Advance the baseline: next check diffs from this moment.
         }
 
-        $subtasks = @()
-        if ($t.PSObject.Properties['subtasks'] -and $t.subtasks) {
-            $subtasks = @($t.subtasks | Select-Object -First 15 |
-                ForEach-Object { @{ text = [string]$_.text; done = [bool]$_.done } })
+        # Missing even after the relink attempt. Said once: a scan file
+        # remembers that the user was already told (missingNoted).
+        $folderMissing = $false
+        if ($missingDirs.ContainsKey($tid)) {
+            $noted = ''
+            if ($scan -and $scan.PSObject.Properties['missingNoted']) { $noted = [string]$scan.missingNoted }
+            if ($noted -ine [string]$missingDirs[$tid]) { $folderMissing = $true; $missingInDigest[$tid] = [string]$missingDirs[$tid] }
         }
+
         # What the linked folder actually IS - without it the model can only
         # comment on how many bytes moved.
         # One card per project, referenced by name: a project's cards all share
@@ -634,7 +998,9 @@ if ($NewTasksOnly) {
             }
         }
 
-        $hasFolderSignal = $changeCount -gt 0
+        # Whether the folder moved at all since the task got it: the done gate
+        # for a folder only this task watches.
+        $hasFolderSignal = ($changeCount -gt 0 -or $linkCommits.Count -gt 0 -or $linkFiles.Count -gt 0 -or $dirtyPaths.Count -gt 0)
         if ($scanDiff) {
             foreach ($k in @('newCommits', 'changedFiles', 'dirtyNow', 'newFiles', 'modifiedFiles')) {
                 if ($scanDiff.ContainsKey($k) -and @($scanDiff[$k]).Count -gt 0) { $hasFolderSignal = $true }
@@ -642,37 +1008,64 @@ if ($NewTasksOnly) {
         }
 
         # Split the folder's activity into what belongs to THIS task and what
-        # merely happened next to it.
+        # merely happened next to it - over the cumulative window, so evidence
+        # from three days ago still counts when the last piece lands today.
         $kw = Task-Keywords $t
-        $pool = @()
-        if ($scanDiff) {
-            foreach ($k in @('changedFiles', 'dirtyNow', 'newFiles', 'modifiedFiles')) {
-                if ($scanDiff.ContainsKey($k)) { $pool += @($scanDiff[$k]) }
-            }
-        }
+        $pool = @($linkFiles) + @($dirtyPaths)
+        if ($scanDiff -and $scanDiff.kind -eq 'files') { $pool += @($scanDiff.newFiles) + @($scanDiff.modifiedFiles) }
         $pool += @($changes | ForEach-Object { [string]$_.file })
-        $clean = @($pool | Where-Object { -not (Is-Noise ([string]$_)) })
+        $clean = @($pool | Where-Object { $_ -and -not (Is-Noise ([string]$_)) } | Select-Object -Unique)
         $myFiles = @(Match-Evidence $kw $clean)
         $nearFiles = @(Match-Evidence (Task-Stems $kw) $clean | Where-Object { $myFiles -notcontains $_ })
         $myCommits = New-Object System.Collections.Generic.List[string]
-        foreach ($cd in $commitDetail) {
-            $hitFiles = @(Match-Evidence $kw @($cd.files | Where-Object { -not (Is-Noise ([string]$_)) }))
+        foreach ($cd in $linkCommits) {
+            $real = @($cd.real)
+            $hitFiles = @(Match-Evidence $kw $real)
             $subjHit = @(Match-Evidence $kw @([string]$cd.line))
-            if ($hitFiles.Count -gt 0) { $myCommits.Add(([string]$cd.line) + ' -> ' + (($hitFiles | Select-Object -First 3) -join ', ')) }
+            if ($ownHashes.ContainsKey([string]$cd.hash)) {
+                $myCommits.Add(([string]$cd.line) + ' -> ' + (($real | Select-Object -First 3) -join ', '))
+            }
+            elseif ($hitFiles.Count -gt 0) { $myCommits.Add(([string]$cd.line) + ' -> ' + (($hitFiles | Select-Object -First 3) -join ', ')) }
             elseif ($subjHit.Count -gt 0) { $myCommits.Add([string]$cd.line) }
         }
-        $myCommits = @($myCommits | Select-Object -First 6)
+        $myCommits = @($myCommits | Select-Object -First 10)
         $shared = $false
         if ($dirs.Count -gt 0) {
             $dk = ([string]$dirs[0]).ToLowerInvariant()
             if ($dirTaskCount.ContainsKey($dk) -and $dirTaskCount[$dk] -gt 1) { $shared = $true }
         }
         if (($myFiles.Count -gt 0 -or $myCommits.Count -gt 0) -or (-not $shared -and $hasFolderSignal)) {
-            $evidenceIds[[string]$t.id] = $true
+            $evidenceIds[$tid] = $true
         }
 
-        @{
-            id = [string]$t.id; title = [string]$t.title; status = [string]$t.status
+        # Per-subtask evidence: the same keyword match, but on the subtask's
+        # own words. "permissions.mjs created" can be ticked when a commit
+        # touched permissions.mjs; a subtask naming nothing never can.
+        $subtasks = @()
+        $subEvidence[$tid] = @{}
+        if ($t.PSObject.Properties['subtasks'] -and $t.subtasks) {
+            $subtasks = @($t.subtasks | Select-Object -First 15 | ForEach-Object {
+                $st = @{ text = [string]$_.text; done = [bool]$_.done }
+                if (-not $_.done) {
+                    $skw = @(Task-Keywords ([pscustomobject]@{ title = [string]$_.text; desc = '' }))
+                    $ev = New-Object System.Collections.Generic.List[string]
+                    if ($skw.Count -gt 0) {
+                        foreach ($f in @(Match-Evidence $skw $clean)) { $ev.Add('file ' + $f) }
+                        foreach ($cd in $linkCommits) {
+                            if (@(Match-Evidence $skw (@($cd.real) + @([string]$cd.line))).Count -gt 0) { $ev.Add('commit ' + [string]$cd.line) }
+                        }
+                    }
+                    if ($ev.Count -gt 0) {
+                        $st.evidence = @($ev | Select-Object -First 4)
+                        $subEvidence[$tid][[string]$_.text] = $true
+                    }
+                }
+                $st
+            })
+        }
+
+        $dt = @{
+            id = $tid; title = [string]$t.title; status = [string]$t.status
             desc = $desc; dirs = $dirs; subtasks = $subtasks
             changeCount = $changeCount; changes = $changes; comments = $comments
             scanDiff = $scanDiff; project = $projName
@@ -680,6 +1073,9 @@ if ($NewTasksOnly) {
             related = @($nearFiles | Select-Object -First 6)
             sharesFolder = $shared
         }
+        if ($linked) { $dt.sinceLinked = $linked }
+        if ($folderMissing) { $dt.folderMissing = $true }
+        $dt
     })
 
     # Top active projects from monitor events (count of changed files per project).
@@ -694,22 +1090,28 @@ if ($NewTasksOnly) {
     # A scoped run (one project's shard) asks only about ITS tasks: an event in
     # some other project is not a reason to spend tokens on this one, or every
     # shard would run whenever anything at all moved.
+    # Only the sinceCheck window counts here: the cumulative one is never empty
+    # once anything happened, and would wake the model on every check.
     $scoped = [bool]($TaskId -or $idSet.Count -gt 0)
     $signal = (-not $scoped) -and $events.Count -gt 0
     $doneNeedsEvidence = $true
     foreach ($dt in $digestTasks) {
         if ($dt.changeCount -gt 0) { $signal = $true }
+        # A folder the user has not been told about yet is worth one note.
+        if ($dt.ContainsKey('folderMissing')) { $signal = $true }
         if ($dt.scanDiff) {
             foreach ($k in @('newCommits', 'changedFiles', 'dirtyNow', 'newFiles', 'modifiedFiles')) {
                 if ($dt.scanDiff.ContainsKey($k) -and @($dt.scanDiff[$k]).Count -gt 0) { $signal = $true }
             }
         }
     }
-    $skipEligible = -not ($TaskId -and $Replan)
+    $skipEligible = -not ($TaskId -and $Replan) -and -not $DigestOnly
     if ($skipEligible -and -not $signal) {
         $msg = 'skipped: no activity since last check - zero AI tokens spent' + "`r`n" +
             ('[timing] check total {0:N0}s' -f $stopwatch.Elapsed.TotalSeconds)
-        [IO.File]::WriteAllText($log, $msg, $utf8NoBom)
+        # Appended, not overwritten: a relink or missing-folder warning above
+        # must still reach the app.
+        Add-Content $log $msg
         exit 0
     }
 
@@ -731,6 +1133,11 @@ if ($NewTasksOnly) {
     [IO.File]::WriteAllText($digestPath, ($digest | ConvertTo-Json -Depth 8), $utf8NoBom)
 }
 $allowNewTasks = -not ($scoped -and -not ($Replan -and $TaskId))
+
+if ($DigestOnly) {
+    Add-Content $log ('digest-only: ' + $digestPath + "`r`n" + ('[timing] check total {0:N0}s' -f $stopwatch.Elapsed.TotalSeconds))
+    exit 0
+}
 
 # ---------- Claude: digest in, tiny patch out ----------
 # A digest is a few KB by design. Anything larger means a serialization bug
@@ -804,6 +1211,7 @@ if ($NewTasksOnly) {
     $props = @{
         updates = @{ type = 'array'; items = (S-Obj @{
             id = (S-Str); note = (S-Str); status = $sStatus; done = @{ type = 'boolean' }
+            subtasksDone = (S-StrArr)
         } @('id', 'note')) }
     }
     # A scoped shard gets no newTasks field at all: the schema, not the
@@ -1019,6 +1427,26 @@ if (Test-Path $patchPath) {
                         $t.done = $true
                     }
                 }
+                # Ticking a subtask is the same kind of claim as closing the
+                # task, so the script holds it to the same rule: exact text of
+                # an open subtask that showed its own evidence in this digest.
+                if ($isRoutineCheck -and $u.PSObject.Properties['subtasksDone'] -and $u.subtasksDone) {
+                    $evMap = @{}
+                    if ($subEvidence.ContainsKey([string]$u.id)) { $evMap = $subEvidence[[string]$u.id] }
+                    foreach ($sdText in @(AsArr $u.subtasksDone)) {
+                        $want = ([string]$sdText).Trim()
+                        if (-not $want) { continue }
+                        $sub = $null
+                        if ($t.PSObject.Properties['subtasks'] -and $t.subtasks) {
+                            $sub = @($t.subtasks | Where-Object { ([string]$_.text).Trim() -ceq $want }) | Select-Object -First 1
+                        }
+                        if (-not $sub) { Add-Content $log ('[info] refused subtask tick for ' + $u.id + ': no subtask with that exact text: ' + $want); continue }
+                        if ($sub.done) { continue }
+                        if (-not $evMap.ContainsKey([string]$sub.text)) { Add-Content $log ('[info] refused subtask tick for ' + $u.id + ': no evidence for: ' + $want); continue }
+                        $sub.done = $true
+                        Add-Content $log ('[info] subtask ticked for ' + $u.id + ': ' + $want)
+                    }
+                }
                 $t.updatedAt = $stamp
             }
 
@@ -1083,6 +1511,16 @@ if (Test-Path $patchPath) {
             }
         }
         Remove-Item $patchPath -Force
+
+        # A missing folder the model has now written its note about is not
+        # put in front of it again (the warn line keeps reaching the app).
+        foreach ($tid in @($touched | Select-Object -Unique)) {
+            if (-not ($missingInDigest -and $missingInDigest.ContainsKey($tid))) { continue }
+            $ms = Read-Scan $tid
+            if (-not $ms) { $ms = New-Object PSObject -Property @{ taskId = $tid; dir = $missingInDigest[$tid]; isGit = $false } }
+            Set-Prop $ms 'missingNoted' $missingInDigest[$tid]
+            Write-Scan $tid $ms
+        }
 
         # Only now does the baseline move, and only for the tasks this run had
         # something to say about (plus newborn tasks). Re-baselining every task

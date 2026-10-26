@@ -1079,6 +1079,7 @@ function parseUsage(logFile, startedAt) {
 // Georgian, because every string the user reads in this app is Georgian.
 // First match wins: the specific lines sit above the generic "merge failed".
 const WARN_TEXT = [
+  [/linked folder missing for/i, 'A task\'s linked folder is gone - add its new location under Settings > Work folders'],
   [/board lock not acquired/i, 'The board was busy (another run held the lock) - nothing was saved'],
   [/failed validation twice/i, 'The AI answer failed the checks twice - nothing was applied'],
   [/rejected after retry/i, 'The AI answer failed the checks twice - nothing was applied'],
