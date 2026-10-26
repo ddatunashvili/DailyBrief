@@ -8,6 +8,13 @@
 #      undoes everything, including whatever was already uncommitted
 # It never commits and never pushes: the diff is left in the working tree and
 # VS Code (opened before the model starts) shows it live in Source Control.
+# Two lean model calls (claude-run.ps1: no user hooks/MCP/CLAUDE.md, ~1k
+# baseline tokens instead of ~30k per turn), both with the folder as cwd:
+#   1. plan      - haiku, Read/Glob/Grep only: a concrete file-level plan
+#   2. implement - sonnet, edit tools, the plan inlined, 25 turns (was 40,
+#                  most of which went to re-exploring the project)
+# The report comes back as structured output; the script writes it to
+# execute-out-<runid>.json in the same shape the model used to write itself.
 # ASCII-only on purpose (PS 5.1 encoding).
 param(
     [Parameter(Mandatory = $true)][string]$TaskId,
@@ -39,6 +46,35 @@ try {
 } catch {
     [IO.File]::WriteAllText($log, ('[fatal] ' + $_.Exception.Message), $utf8NoBom)
     exit 3
+}
+. (Join-Path $PSScriptRoot 'claude-run.ps1')   # Invoke-ClaudeLean
+. (Join-Path $PSScriptRoot 'lock.ps1')         # Invoke-WithBoardLock (board.lock, shared with main.js)
+
+function Read-Kanban {
+    return (([string](Get-Content $kanbanPath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json)
+}
+
+# Two calls would otherwise be billed as the last one only: main.js reads usage
+# from the LAST result line in the log. One summed line keeps the AI usage page
+# honest; it carries the last call's outcome fields unchanged.
+function Write-UsageTotal($envs) {
+    if ($envs.Count -lt 2) { return }
+    $last = $envs[$envs.Count - 1]
+    $sum = [ordered]@{ input_tokens = [int64]0; cache_creation_input_tokens = [int64]0; cache_read_input_tokens = [int64]0; output_tokens = [int64]0 }
+    $cost = 0.0; $turns = 0; $ms = [int64]0
+    foreach ($e in $envs) {
+        if ($e.usage) {
+            foreach ($k in @($sum.Keys)) { if ($e.usage.PSObject.Properties[$k]) { $sum[$k] = $sum[$k] + [int64]$e.usage.$k } }
+        }
+        $cost += [double]$e.total_cost_usd; $turns += [int]$e.num_turns; $ms += [int64]$e.duration_ms
+    }
+    $agg = [ordered]@{
+        type = 'result'; subtype = [string]$last.subtype; is_error = [bool]$last.is_error
+        num_turns = $turns; duration_ms = $ms; total_cost_usd = $cost; usage = $sum
+        result = ('(usage summed over ' + $envs.Count + ' model calls)')
+    }
+    if ($last.PSObject.Properties['errors'] -and $last.errors) { $agg.errors = @($last.errors) }
+    Add-Content -Path $log -Value ($agg | ConvertTo-Json -Depth 4 -Compress) -Encoding UTF8
 }
 
 # git talks on stderr even when it succeeds ("Switched to a new branch"), and
@@ -73,11 +109,9 @@ function AsArr($v) {
 # Every early exit still has to land in the task's comment thread, or the user
 # is left staring at a card that says nothing happened for no stated reason.
 function Post-Note([string]$text, [string]$noteOnly) {
-    $mutex = New-Object System.Threading.Mutex($false, 'DailyBriefKanbanWrite')
-    $got = $false
     try {
-        $got = $mutex.WaitOne(30000)
-        $fresh = ([string](Get-Content $kanbanPath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json
+      Invoke-WithBoardLock {
+        $fresh = Read-Kanban
         $t = $fresh.tasks | Where-Object { $_.id -eq $TaskId } | Select-Object -First 1
         if (-not $t) { return }
         if ($text) {
@@ -95,11 +129,9 @@ function Post-Note([string]$text, [string]$noteOnly) {
         }
         $t.updatedAt = $stamp
         [IO.File]::WriteAllText($kanbanPath, ($fresh | ConvertTo-Json -Depth 10), $utf8NoBom)
+      }
     } catch {
         Add-Content $log ('[warn] note failed: ' + $_.Exception.Message)
-    } finally {
-        if ($got) { $mutex.ReleaseMutex() }
-        $mutex.Dispose()
     }
 }
 
@@ -162,6 +194,9 @@ if ($nowBranch -ne $branch) {
 }
 
 $dirtyBefore = @(Git-Lines @('-C', $dir, 'status', '--porcelain')).Count
+# The prompt forbids commits and branch switches; this is how the script
+# notices if the model did one anyway (it reports, it never reverts).
+$headBefore = Git-Quiet @('-C', $dir, 'rev-parse', 'HEAD')
 
 # ---------- VS Code first, so the user watches it happen ----------
 $codeExe = ''
@@ -201,35 +236,76 @@ $briefLines = @(
 ) + @($subtasks | ForEach-Object { '  ' + $_ }) + @('COMMENTS:') + @($comments | ForEach-Object { '  ' + $_ })
 $briefText = ($briefLines -join "`r`n")
 
-$prompt = (Get-Content (Join-Path $app 'prompt-execute.md') -Raw -Encoding UTF8).
-    Replace('{{DATA}}', $base).
-    Replace('{{NOW}}', $now).
-    Replace('{{BRIEF}}', $briefText).
-    Replace('{{DIR}}', $dir).
-    Replace('{{BRANCH}}', $branch).
-    Replace('{{OUT}}', $outPath)
+function Fill-Prompt([string]$file, [string]$planText) {
+    # {{BRIEF}}/{{PLAN}} last: they carry user/model text that must never be
+    # mistaken for a placeholder.
+    return ([string](Get-Content (Join-Path $app $file) -Raw -Encoding UTF8)).
+        Replace('{{DATA}}', $base).
+        Replace('{{NOW}}', $now).
+        Replace('{{DIR}}', $dir).
+        Replace('{{BRANCH}}', $branch).
+        Replace('{{OUT}}', $outPath).
+        Replace('{{PLAN}}', $planText).
+        Replace('{{BRIEF}}', $briefText)
+}
 
 # ---------- run, inside the project ----------
+# cwd = the project folder for both calls: that is the confinement. The lean
+# runner loads no user settings, so there is no permission allowlist to lean
+# on - it passes --dangerously-skip-permissions with exactly the tools named
+# here, and the prompt forbids every path outside {{DIR}}.
 Set-Location $dir
-$ErrorActionPreference = 'Continue'
-# The only run with Bash and Edit. --max-turns is the real cost ceiling here:
-# each turn can read files and run commands, so this is 10-40x a check.
-$claudeArgs = @(
-    '-p',
-    '--model', 'sonnet',
-    '--allowedTools', 'Read,Write,Edit,Bash,Glob,Grep',
-    '--allow-dangerously-skip-permissions',
-    '--dangerously-skip-permissions',
-    '--max-turns', '40',
-    '--output-format', 'json'
-)
-$prompt | & $claude @claudeArgs 2>&1 | Out-File $log -Encoding utf8
-$ErrorActionPreference = 'Stop'
+$envelopes = New-Object System.Collections.Generic.List[object]
+
+# Step 1 - plan. Cheap model, read-only tools: finding the files is most of
+# what the 40-turn run used to spend its turns on.
+$planSchema = '{"type":"object","properties":{"files":{"type":"array","items":{"type":"string"}},"steps":{"type":"array","items":{"type":"string"}},"risks":{"type":"array","items":{"type":"string"}}},"required":["files","steps","risks"],"additionalProperties":false}'
+$planSystem = 'You plan code changes inside a git repository. Your working directory is the project. You may only read (Glob, Grep, Read). Finish with the structured plan.'
+$planRes = Invoke-ClaudeLean -Prompt (Fill-Prompt 'prompt-execute-plan.md' '') -Log $log -System $planSystem `
+    -Model 'haiku' -Tools 'Read,Glob,Grep' -Schema $planSchema -MaxTurns 12
+if ($planRes.envelope) { $envelopes.Add($planRes.envelope) }
+$planText = ''
+if ($planRes.ok -and $planRes.data) {
+    $pl = $planRes.data
+    $planLines = @('FILES:') + @(AsArr $pl.files | ForEach-Object { '  - ' + [string]$_ }) +
+        @('STEPS:') + @(AsArr $pl.steps | ForEach-Object { '  - ' + [string]$_ }) +
+        @('RISKS:') + @(AsArr $pl.risks | ForEach-Object { '  - ' + [string]$_ })
+    $planText = ($planLines -join "`r`n")
+    Add-Content $log ('[plan] ' + @(AsArr $pl.files).Count + ' file(s), ' + @(AsArr $pl.steps).Count + ' step(s)')
+}
+if (-not $planText) {
+    # Not fatal: the implement step can still find its way, just slower.
+    Add-Content $log ('[info] plan step returned nothing usable (' + [string]$planRes.error + ') - implementing without a plan')
+    $planText = '(no plan - the planning pass failed; find the files yourself, briefly)'
+}
+
+# Step 2 - implement. The only call with Bash and Edit. --max-turns is the
+# real cost ceiling: each turn can read files and run commands.
+$reportSchema = '{"type":"object","properties":{"summary":{"type":"string"},"subtasksDone":{"type":"array","items":{"type":"string"}},"filesChanged":{"type":"array","items":{"type":"string"}}},"required":["summary","subtasksDone","filesChanged"],"additionalProperties":false}'
+$implSystem = 'You are a careful software engineer working in the user''s git repository through tools. Your working directory is the project. Follow every rule in the message exactly - above all: never commit, push, switch branch, reset, stash or clean, and never touch files outside the working directory. Finish with the structured report.'
+$implRes = Invoke-ClaudeLean -Prompt (Fill-Prompt 'prompt-execute.md' $planText) -Log $log -System $implSystem `
+    -Model 'sonnet' -Tools 'Read,Write,Edit,Bash,Glob,Grep' -Schema $reportSchema -MaxTurns 25
+if ($implRes.envelope) { $envelopes.Add($implRes.envelope) }
+Write-UsageTotal $envelopes
 Set-Location $base
+
+# Same file and shape the model used to write itself, so the merge below is
+# unchanged. No retry here on purpose: a second run would edit code again.
+if ($implRes.ok -and $implRes.data) {
+    [IO.File]::WriteAllText($outPath, ($implRes.data | ConvertTo-Json -Depth 6), $utf8NoBom)
+} else {
+    Add-Content $log ('[warn] model wrote no output file: ' + [string]$implRes.error)
+}
 
 # ---------- report back to the card ----------
 $dirtyAfter = @(Git-Lines @('-C', $dir, 'status', '--porcelain')).Count
 $changed = $dirtyAfter - $dirtyBefore
+$branchAfter = Git-Quiet @('-C', $dir, 'rev-parse', '--abbrev-ref', 'HEAD')
+$headAfter = Git-Quiet @('-C', $dir, 'rev-parse', 'HEAD')
+$guardNote = ''
+if ($branchAfter -ne $branch) { $guardNote = ('branch changed during the run: now on ' + $branchAfter) }
+elseif ($headAfter -ne $headBefore) { $guardNote = ('a commit was made during the run: HEAD ' + $headBefore.Substring(0, [Math]::Min(8, $headBefore.Length)) + ' -> ' + $headAfter.Substring(0, [Math]::Min(8, $headAfter.Length))) }
+if ($guardNote) { Add-Content $log ('[warn] ' + $guardNote) }
 $summary = ''
 $doneTexts = @()
 if (Test-Path $outPath) {
@@ -243,14 +319,15 @@ if (Test-Path $outPath) {
     Remove-Item $outPath -Force -ErrorAction SilentlyContinue
 }
 if (-not $summary) { $summary = $STR.noSummary }
+if ($guardNote) { $summary = $summary + ' [' + $guardNote + ']' }
 
 $noteText = '{0} | branch: {1} | {2}: {3}' -f $STR.noteHead, $branch, $STR.noteFiles, $dirtyAfter
 
-$mutex = New-Object System.Threading.Mutex($false, 'DailyBriefKanbanWrite')
-$got = $false
+# Read-apply-write only inside the lock; kanban.json is re-read in it so the
+# merge lands on whatever was saved during the (long) run.
 try {
-    $got = $mutex.WaitOne(30000)
-    $fresh = ([string](Get-Content $kanbanPath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json
+  Invoke-WithBoardLock {
+    $fresh = Read-Kanban
     $t = $fresh.tasks | Where-Object { $_.id -eq $TaskId } | Select-Object -First 1
     if ($t) {
         # Tick off only the steps the model reported by their exact text: the
@@ -274,11 +351,9 @@ try {
         $t.updatedAt = $stamp
         [IO.File]::WriteAllText($kanbanPath, ($fresh | ConvertTo-Json -Depth 10), $utf8NoBom)
     }
+  }
 } catch {
     Add-Content $log ('[warn] result merge failed: ' + $_.Exception.Message)
-} finally {
-    if ($got) { $mutex.ReleaseMutex() }
-    $mutex.Dispose()
 }
 
 Add-Content $log ('[branch] {0} | files dirty before/after: {1}/{2} (delta {3})' -f $branch, $dirtyBefore, $dirtyAfter, $changed)

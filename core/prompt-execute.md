@@ -4,11 +4,17 @@ The task:
 
 {{BRIEF}}
 
+## The plan
+
+A read-only pass over this folder already worked out which files to touch:
+
+{{PLAN}}
+
 ## What you are doing
 
 Write code. This is the one run where you have Bash, Edit and Write inside a real project — use it: read the files you need, work out how it fits together, then change it.
 
-1. Get your bearings in the code first — read the files you are changing and the code around them. The checklist is a direction, not an exact instruction: where reality differs, do what actually solves the task.
+1. Start from the plan: read the files it names and the code around them, then change them — do not re-explore the whole project. The plan and the checklist are a direction, not an exact instruction: where reality differs, do what actually solves the task. Your turns are limited (about 20), so spend them on edits and the build/test, not on browsing.
 2. Do as many steps as you have time for. A half-started change is worse than one finished one — take one step all the way through, then move on.
 3. If the project has a build or tests (`npm run build`, `npm test`, `pytest`, `tsc --noEmit`), run them against your change and fix what breaks.
 4. Write code the way this project writes it — same style, same naming, same libraries. A new dependency only when there is no other way.
@@ -21,15 +27,14 @@ Write code. This is the one run where you have Bash, Edit and Write inside a rea
 - Deleting a file the task does not touch. `rm -rf`, mass renames, auto-formatting the whole project — no.
 - `.env`, keys, credentials — do not open them, do not print them, do not move them.
 - Deploying, uploading to a server, changing anything in production — no.
+- Reading or changing anything outside `{{DIR}}` — no. Every path you touch is inside this folder.
 
 ## At the end
 
-Write exactly this file: `{{OUT}}` (full path, strict JSON):
+Your final answer is the report (structured output):
 
-{"summary":"<in English, 2-5 sentences: what you did, in which files, what is left>","subtasksDone":["<the checklist step's exact text>"],"filesChanged":["<changed file>"]}
-
-- `summary` is required — it appears as a comment on David's card. If something went undone, say plainly why.
-- `subtasksDone` — only the steps you **actually** finished, in exactly the wording of the checklist. If none, leave it empty.
+- `summary` — required, in English, 2-5 sentences: what you did, in which files, what is left. It appears as a comment on David's card. If something went undone, say plainly why.
+- `subtasksDone` — only the checklist steps you **actually** finished, in exactly the wording of the checklist. If none, leave it empty.
 - `filesChanged` — the list of files you changed.
 
-Do not finish without writing this file.
+Do not finish without the report.
