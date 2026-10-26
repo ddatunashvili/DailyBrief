@@ -72,7 +72,7 @@ contextBridge.exposeInMainWorld('dailybrief', {
   // Work folders: roots.json entries + built-in defaults, native picker, save.
   rootsLoad: () => ipcRenderer.invoke('roots:load'),
   rootsPick: () => ipcRenderer.invoke('roots:pick'),
-  rootsSave: (list) => ipcRenderer.invoke('roots:save', list),
+  rootsSave: (list, disabled) => ipcRenderer.invoke('roots:save', list, disabled),
   // The AI's open questions and the user's answers to them.
   questionsLoad: () => ipcRenderer.invoke('questions:load'),
   questionsAnswer: (id, answer) => ipcRenderer.invoke('questions:answer', id, answer),

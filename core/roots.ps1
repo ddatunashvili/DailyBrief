@@ -12,13 +12,19 @@
 function Get-WorkRoots {
     param([switch]$WithDownloads)
     $list = New-Object System.Collections.Generic.List[string]
+    # "disabled" = built-in folders the user switched off in Settings.
+    $off = @{}
     $cfg = Join-Path $base 'roots.json'
     if (Test-Path $cfg) {
         try {
             $j = ([string](Get-Content $cfg -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json
             foreach ($r in @($j.roots)) { if ($r) { $list.Add(([string]$r).TrimEnd('\')) } }
+            if ($j.PSObject.Properties['disabled']) {
+                foreach ($r in @($j.disabled)) { if ($r) { $off[([string]$r).TrimEnd('\').ToLowerInvariant()] = $true } }
+            }
         } catch { }
     }
+    $userCount = $list.Count
     $defaults = @(
         [Environment]::GetFolderPath('Desktop'),
         [Environment]::GetFolderPath('MyDocuments'),
@@ -34,9 +40,12 @@ function Get-WorkRoots {
 
     $seen = @{}
     $out = New-Object System.Collections.Generic.List[string]
-    foreach ($r in $list) {
+    for ($i = 0; $i -lt $list.Count; $i++) {
+        $r = $list[$i]
         $k = $r.ToLowerInvariant()
         if ($seen.ContainsKey($k)) { continue }
+        # A switched-off default stays off; the same folder listed by the user wins.
+        if ($i -ge $userCount -and $off.ContainsKey($k)) { continue }
         $seen[$k] = $true
         if (Test-Path -LiteralPath $r -PathType Container) { $out.Add($r) }
     }

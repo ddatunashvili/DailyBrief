@@ -57,7 +57,7 @@ test('describeRoots flags missing user entries and hides duplicated defaults', (
     { dir: 'G:\\Desktop', missing: false }, { dir: 'G:\\gone', missing: true },
     { dir: 'C:\\Users\\u\\Desktop', missing: false }
   ]);
-  assert.deepStrictEqual(d.builtin, ['C:\\Users\\u\\Documents']);
+  assert.deepStrictEqual(d.builtin, [{ dir: 'C:\\Users\\u\\Documents', disabled: false }]);
 });
 
 test('writeRootsFile writes BOM-less JSON atomically and readRootsFile reads it back', () => {
@@ -75,4 +75,25 @@ test('writeRootsFile writes BOM-less JSON atomically and readRootsFile reads it 
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('disabled built-ins: left out of the walk, still listed, user entry wins', () => {
+  const exists = () => true;
+  const defs = ['C:\\Users\\u\\Desktop', 'C:\\Users\\u\\source'];
+  assert.deepStrictEqual(R.effectiveRoots(['G:\\Desktop'], defs, exists, ['c:\\users\\u\\SOURCE']),
+    ['G:\\Desktop', 'C:\\Users\\u\\Desktop']);
+  const v = R.describeRoots(['G:\\Desktop'], defs, exists, ['C:\\Users\\u\\source']);
+  assert.deepStrictEqual(v.builtin, [
+    { dir: 'C:\\Users\\u\\Desktop', disabled: false },
+    { dir: 'C:\\Users\\u\\source', disabled: true }
+  ]);
+  // Only real defaults can be off; a folder the user lists again is back on.
+  assert.deepStrictEqual(R.cleanDisabled(['C:\\Users\\u\\source', 'G:\\x', 'C:\\Users\\u\\Desktop'], defs, ['c:\\users\\u\\desktop']),
+    ['C:\\Users\\u\\source']);
+});
+
+test('roots.json round-trips disabled, omits it when empty', () => {
+  assert.strictEqual(R.serializeRoots(['G:\\a'], []).includes('disabled'), false);
+  const c = R.parseRootsConfig(R.serializeRoots(['G:\\a'], ['C:\\Users\\u\\source']));
+  assert.deepStrictEqual(c, { roots: ['G:\\a'], disabled: ['C:\\Users\\u\\source'] });
 });

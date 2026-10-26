@@ -31,7 +31,7 @@ const { shardByProject } = require('./src/shard');
 const { averageByMode } = require('./src/runstats');
 const { withBoardLock } = require('./src/boardlock');
 const { mergeBoard, canon } = require('./src/boardmerge');
-const { defaultRoots, effectiveRoots, describeRoots, cleanUserRoots, readRootsFile, writeRootsFile } = require('./src/roots');
+const { defaultRoots, effectiveRoots, describeRoots, cleanUserRoots, cleanDisabled, readRootsConfig, writeRootsFile } = require('./src/roots');
 
 // Two roots, and they must not be confused.
 //
@@ -608,11 +608,13 @@ function rootDefaults(withDownloads) {
 }
 
 function workRoots(withDownloads) {
-  return effectiveRoots(readRootsFile(ROOTS_FILE), rootDefaults(withDownloads));
+  const cfg = readRootsConfig(ROOTS_FILE);
+  return effectiveRoots(cfg.roots, rootDefaults(withDownloads), null, cfg.disabled);
 }
 
 function rootsView() {
-  return describeRoots(readRootsFile(ROOTS_FILE), rootDefaults(false));
+  const cfg = readRootsConfig(ROOTS_FILE);
+  return describeRoots(cfg.roots, rootDefaults(false), null, cfg.disabled);
 }
 
 ipcMain.handle('roots:load', () => rootsView());
@@ -629,14 +631,16 @@ ipcMain.handle('roots:pick', async () => {
 // rescans at once: registry first, then top-dirs.txt, then the Projects page
 // reloads on 'projects:updated'. The monitor only looks back 40 minutes, so
 // a new root's history arrives with the registry's own git/disk read, not it.
-ipcMain.handle('roots:save', (ev, list) => {
-  const before = readRootsFile(ROOTS_FILE);
+ipcMain.handle('roots:save', (ev, list, disabled) => {
+  const before = readRootsConfig(ROOTS_FILE);
   const next = cleanUserRoots(list);
+  // Built-ins switched off in Settings; Downloads counts too (the monitor walks it).
+  const nextOff = cleanDisabled(Array.isArray(disabled) ? disabled : before.disabled, rootDefaults(true), next);
   let error = '';
-  const same = before.length === next.length &&
-    before.every((p, i) => p.toLowerCase() === next[i].toLowerCase());
+  const eq = (a, b) => a.length === b.length && a.every((p, i) => p.toLowerCase() === b[i].toLowerCase());
+  const same = eq(before.roots, next) && eq(before.disabled, nextOff);
   if (!same) {
-    try { writeRootsFile(ROOTS_FILE, next); } catch (e) { error = String(e && e.message || e); }
+    try { writeRootsFile(ROOTS_FILE, next, nextOff); } catch (e) { error = String(e && e.message || e); }
     if (!error) {
       dirCache = { at: 0, dirs: [] };
       runDiscover({ again: true, withDirs: true });
