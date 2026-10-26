@@ -992,7 +992,19 @@ function parseUsage(logFile, startedAt) {
 }
 
 // Georgian, because every string the user reads in this app is Georgian.
+// First match wins: the specific lines sit above the generic "merge failed".
 const WARN_TEXT = [
+  [/board lock not acquired/i, 'The board was busy (another run held the lock) - nothing was saved'],
+  [/failed validation twice/i, 'The AI answer failed the checks twice - nothing was applied'],
+  [/rejected after retry/i, 'The AI answer failed the checks twice - nothing was applied'],
+  [/dropped from model output/i, 'Some AI suggestions failed the checks and were left out'],
+  [/refused done for/i, 'The AI wanted to close a task without evidence - left open'],
+  [/doc created but no link/i, 'The brief doc was created but its link never came back'],
+  [/body id that is not an id/i, 'The brief doc answer was malformed - its link was kept as it was'],
+  [/publish failed/i, 'Publishing the brief to your Claude Doc failed'],
+  [/branch changed during the run/i, 'Execute: the branch changed while the AI worked - check the repo'],
+  [/a commit was made during the run/i, 'Execute: a commit appeared while the AI worked - check the repo'],
+  [/VS Code did not open|code\.cmd not found/i, 'VS Code could not be opened - the AI worked without it'],
   [/model wrote no output file/i, 'The AI never wrote its answer file - nothing was saved'],
   [/output file is not valid JSON/i, 'The AI answered with broken JSON - it could not be saved'],
   [/summary file is not valid JSON/i, 'The AI result file was broken JSON'],
