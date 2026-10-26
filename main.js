@@ -31,6 +31,7 @@ const { shardByProject } = require('./src/shard');
 const { averageByMode } = require('./src/runstats');
 const { withBoardLock } = require('./src/boardlock');
 const { mergeBoard, canon } = require('./src/boardmerge');
+const { defaultRoots, effectiveRoots, describeRoots, cleanUserRoots, readRootsFile, writeRootsFile } = require('./src/roots');
 
 // Two roots, and they must not be confused.
 //
@@ -60,6 +61,8 @@ const MONITOR_SCRIPT = path.join(CORE_DIR, 'monitor.ps1');
 // Project registry: what the user's folders actually ARE (stack, commits,
 // dirty files, TODOs). Built by a script, read by every AI run and the UI.
 const DISCOVER_SCRIPT = path.join(CORE_DIR, 'discover-projects.ps1');
+// Scores the most active folders into top-dirs.txt (also run by the pipeline).
+const DISCOVER_DIRS_SCRIPT = path.join(CORE_DIR, 'discover-dirs.ps1');
 // Ask + ideas: two AI modes that only ever read the registry (core\ask.ps1).
 const ASK_SCRIPT = path.join(CORE_DIR, 'ask.ps1');
 // The only run that edits a real project: own branch, VS Code, Bash.
@@ -80,6 +83,8 @@ const PROJECTS_FILE = path.join(DATA, 'projects.json');
 const ASK_LOG_FILE = path.join(DATA, 'ask-log.json');
 const IDEAS_FILE = path.join(DATA, 'ideas.json');
 const IGNORE_FILE = path.join(DATA, 'ignore.json');
+// Work folders added in Settings: { roots: [...] }, read by core\roots.ps1.
+const ROOTS_FILE = path.join(DATA, 'roots.json');
 const EXECUTE_REQUEST_FILE = path.join(DATA, 'execute-request.json');
 const QUESTIONS_FILE = path.join(DATA, 'questions.json');
 const ANALYTICS_DIR = path.join(DATA, 'analytics');
@@ -541,21 +546,105 @@ ipcMain.handle('kanban:generate', () => runCheck('', false, true));
    (no AI), refreshed alongside the activity monitor. */
 
 let discoverRunning = false;
+// Set when a work-folder change arrives while a scan is already running: that
+// scan read the old roots, so one more pass follows it (then top-dirs.txt).
+let discoverAgain = false;
 
-function runDiscover() {
-  if (discoverRunning) return false;
+function runDiscover(opts) {
+  const o = opts || {};
+  if (discoverRunning) {
+    if (o.again) discoverAgain = true;
+    return false;
+  }
   discoverRunning = true;
   const ps = spawn('powershell.exe', [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
     '-File', DISCOVER_SCRIPT
   ], PS_OPTS);
-  ps.on('error', () => { discoverRunning = false; });
-  ps.on('exit', () => {
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
     discoverRunning = false;
+    if (discoverAgain) {
+      discoverAgain = false;
+      runDiscover({ withDirs: true });
+      return;
+    }
     if (win && !win.isDestroyed()) { try { win.webContents.send('projects:updated'); } catch (e) {} }
-  });
+    if (o.withDirs) runDiscoverDirs();
+  };
+  ps.on('error', finish);
+  ps.on('exit', finish);
   return true;
 }
+
+// top-dirs.txt: the morning pipeline's "most active folders" list
+// (daily-brief.ps1 runs discover-dirs.ps1 the same way). Re-run after a
+// work-folder change so it stops scoring the old roots until tomorrow.
+function runDiscoverDirs() {
+  const ps = spawn('powershell.exe', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+    '-File', DISCOVER_DIRS_SCRIPT, '-OutFile', path.join(DATA, 'top-dirs.txt'), '-Top', '10'
+  ], PS_OPTS);
+  ps.on('error', () => {});
+}
+
+/* Work folders: where the scripts look for projects and activity. roots.json
+   entries (Settings) plus the Windows defaults - core\roots.ps1 computes the
+   same list for every script, src\roots.js mirrors it here. */
+
+function shellDir(name) {
+  try { return app.getPath(name); } catch (e) { return ''; }
+}
+
+function rootDefaults(withDownloads) {
+  return defaultRoots({
+    desktop: shellDir('desktop'),
+    documents: shellDir('documents'),
+    home: process.env.USERPROFILE || '',
+    withDownloads: !!withDownloads
+  });
+}
+
+function workRoots(withDownloads) {
+  return effectiveRoots(readRootsFile(ROOTS_FILE), rootDefaults(withDownloads));
+}
+
+function rootsView() {
+  return describeRoots(readRootsFile(ROOTS_FILE), rootDefaults(false));
+}
+
+ipcMain.handle('roots:load', () => rootsView());
+
+ipcMain.handle('roots:pick', async () => {
+  const r = await dialog.showOpenDialog(win, {
+    properties: ['openDirectory'],
+    title: 'Add a work folder'
+  });
+  return (r.canceled || !r.filePaths.length) ? null : r.filePaths[0];
+});
+
+// Saves the user's list (only existing, non-drive-root folders, deduped) and
+// rescans at once: registry first, then top-dirs.txt, then the Projects page
+// reloads on 'projects:updated'. The monitor only looks back 40 minutes, so
+// a new root's history arrives with the registry's own git/disk read, not it.
+ipcMain.handle('roots:save', (ev, list) => {
+  const before = readRootsFile(ROOTS_FILE);
+  const next = cleanUserRoots(list);
+  let error = '';
+  const same = before.length === next.length &&
+    before.every((p, i) => p.toLowerCase() === next[i].toLowerCase());
+  if (!same) {
+    try { writeRootsFile(ROOTS_FILE, next); } catch (e) { error = String(e && e.message || e); }
+    if (!error) {
+      dirCache = { at: 0, dirs: [] };
+      runDiscover({ again: true, withDirs: true });
+      runMonitor();
+    }
+  }
+  return Object.assign(rootsView(), { changed: !same && !error, error });
+});
 
 /* Ignored folders: everything under one of these paths is invisible to the
    whole app — the monitor stops logging it, the registry stops listing it,
@@ -611,10 +700,6 @@ ipcMain.handle('projects:open', (ev, dir) => {
    deeper than two levels). Cached for a minute — the page searches on every
    keystroke. */
 
-const SEARCH_ROOTS = [
-  ['OneDrive', 'Desktop'], ['OneDrive', 'Documents'], ['Desktop'], ['Documents'],
-  ['Downloads'], ['source'], ['projects']
-].map((parts) => path.join(process.env.USERPROFILE || '', ...parts));
 
 const SEARCH_SKIP = /node_modules|\\\.git($|\\)|AppData|\\Temp|\\\.vscode|__pycache__|\\\.venv|\\venv($|\\)|\\\.next|\\\.nuxt|\\\.output|\\\.turbo|\\\.cache|\\dist($|\\)|\\coverage($|\\)/i;
 
@@ -637,7 +722,7 @@ function scanDirs() {
     if (out.length >= 5000 || SEARCH_SKIP.test(p)) return;
     if (!out.some((x) => x.toLowerCase() === p.toLowerCase())) out.push(p);
   };
-  SEARCH_ROOTS.filter((r) => fs.existsSync(r)).forEach((root) => {
+  workRoots(true).forEach((root) => {
     listDirs(root).forEach((d1) => {
       add(d1);
       listDirs(d1).forEach(add);

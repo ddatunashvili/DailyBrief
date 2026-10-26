@@ -690,6 +690,21 @@
   .zoom-pill.on { opacity: 1; }
   .set-row .hint { color: var(--muted); font-size: 0.74rem; }
   .set-status { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.6rem; }
+  /* Work folders: roots.json entries (removable) + built-in defaults (dimmed). */
+  .wf-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.42rem 0;
+            border-bottom: 1px solid var(--border); font-size: 0.84rem; }
+  .wf-row:last-of-type { border-bottom: 0; }
+  .wf-row > .ic { color: var(--accent); }
+  .wf-row.builtin { opacity: 0.55; }
+  .wf-row.builtin > .ic { color: var(--muted); }
+  .wf-path { flex: 1; word-break: break-all; }
+  .wf-tag { font-size: 0.66rem; border: 1px solid var(--border); border-radius: 999px;
+            padding: 0.02rem 0.45rem; color: var(--muted); white-space: nowrap; }
+  .wf-tag.warn { color: #ffd28a; border-color: #6b5323; }
+  .wf-rm { padding: 0.2rem 0.35rem; display: inline-flex; align-items: center; }
+  .wf-acts { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.7rem; flex-wrap: wrap; }
+  .wf-acts .kb-btn { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .wf-note { font-size: 0.78rem; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -770,6 +785,11 @@
         <h1>Settings</h1>
         <p class="an-sub" id="settings-sub"></p>
       </header>
+      <section class="an-section">
+        <h2>Work folders</h2>
+        <div class="set-status">Where DailyBrief looks for your projects and activity. Folders you add come first; the built-in Windows folders are always scanned when they exist.</div>
+        <div id="roots-box"></div>
+      </section>
       <section class="an-section">
         <h2>Updates</h2>
         <div id="update-box"></div>
@@ -3037,10 +3057,127 @@ const BRIEF = {
       row.appendChild(lab);
       toggles.appendChild(row);
     });
+    renderRootsBox();
     updateStateCache = await api.updateState();
     paintUpdateBox();
     if (api.zoomGet) { zoomFactor = (await api.zoomGet()).factor; }
     paintZoomBox();
+  }
+
+  /* ---- work folders (roots.json) ---- */
+
+  var rootsNote = "";        // last message under the list (rescan, refusal)
+  var rootsScanning = false; // a save started a rescan that has not finished
+
+  async function renderRootsBox() {
+    var box = document.getElementById("roots-box");
+    if (!box) return;
+    if (!api || !api.rootsLoad) {
+      box.innerHTML = '<div class="an-empty">Work folders can be changed in the app only.</div>';
+      return;
+    }
+    paintRootsBox(await api.rootsLoad());
+  }
+
+  function paintRootsBox(view) {
+    var box = document.getElementById("roots-box");
+    if (!box) return;
+    var v = view || { user: [], builtin: [] };
+    var user = arr(v.user);
+    var builtin = arr(v.builtin);
+    box.innerHTML = "";
+    if (!user.length && !builtin.length) {
+      box.appendChild(el("div", "an-empty", "No work folder exists yet - add one."));
+    }
+    user.forEach(function (r) {
+      var row = el("div", "wf-row");
+      row.innerHTML = icon("folder");
+      var p = el("div", "wf-path");
+      p.textContent = String(r.dir);
+      row.appendChild(p);
+      if (r.missing) {
+        var miss = el("span", "wf-tag warn");
+        miss.textContent = "not found";
+        miss.title = "This folder no longer exists - it is skipped until it comes back";
+        row.appendChild(miss);
+      }
+      var rm = el("button", "kb-btn ghost wf-rm", icon("x"));
+      rm.title = "Stop scanning this folder";
+      rm.setAttribute("aria-label", "Remove " + r.dir);
+      rm.addEventListener("click", function () {
+        var key = String(r.dir).toLowerCase();
+        saveRoots(user.map(function (x) { return String(x.dir); })
+          .filter(function (d) { return d.toLowerCase() !== key; }), "Removed.");
+      });
+      row.appendChild(rm);
+      box.appendChild(row);
+    });
+    builtin.forEach(function (d) {
+      var row = el("div", "wf-row builtin");
+      row.innerHTML = icon("folder");
+      var p = el("div", "wf-path");
+      p.textContent = String(d);
+      row.appendChild(p);
+      var tag = el("span", "wf-tag");
+      tag.textContent = "built-in";
+      tag.title = "A Windows default folder - always scanned while it exists";
+      row.appendChild(tag);
+      box.appendChild(row);
+    });
+    var acts = el("div", "wf-acts");
+    var add = el("button", "kb-btn", icon("plus") + "<span>Add folder</span>");
+    add.disabled = rootsScanning;
+    add.addEventListener("click", async function () {
+      var dir = await api.rootsPick();
+      if (!dir) return;
+      var key = String(dir).replace(/\\+$/, "").toLowerCase();
+      if (user.some(function (x) { return String(x.dir).toLowerCase() === key; })) {
+        rootsNote = "That folder is already in the list.";
+        paintRootsBox(v);
+        return;
+      }
+      if (builtin.some(function (x) { return String(x).toLowerCase() === key; })) {
+        rootsNote = "That folder is built in - it is already scanned.";
+        paintRootsBox(v);
+        return;
+      }
+      saveRoots(user.map(function (x) { return String(x.dir); }).concat([dir]), "Added.", dir);
+    });
+    acts.appendChild(add);
+    if (rootsNote || rootsScanning) {
+      var note = el("span", "wf-note");
+      note.textContent = rootsScanning ? (rootsNote ? rootsNote + " " : "") + "Rescanning projects…" : rootsNote;
+      acts.appendChild(note);
+    }
+    box.appendChild(acts);
+  }
+
+  async function saveRoots(list, okText, added) {
+    var res = (await api.rootsSave(list)) || { user: [], builtin: [] };
+    if (res.error) {
+      rootsNote = "Could not save: " + res.error;
+    } else if (added && !arr(res.user).some(function (x) {
+      return String(x.dir).toLowerCase() === String(added).replace(/\\+$/, "").toLowerCase();
+    })) {
+      rootsNote = "Pick a folder, not a whole drive.";
+    } else {
+      rootsNote = okText;
+      if (res.changed) rootsScanning = true;
+    }
+    paintRootsBox(res);
+  }
+
+  if (api && api.onProjectsUpdated && api.rootsLoad) {
+    try {
+      api.onProjectsUpdated(function () {
+        if (!rootsScanning) return;
+        rootsScanning = false;
+        rootsNote = "Projects rescanned.";
+        // The Projects page reloads itself on the same event when it is open;
+        // when it is not, its next open reads the fresh registry anyway.
+        if (!views.settings.hidden) renderRootsBox();
+      });
+    } catch (e) {}
   }
 
   /* ---- window zoom (Ctrl +/-/0, Ctrl+wheel, and this box) ---- */

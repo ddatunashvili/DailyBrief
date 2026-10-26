@@ -69,6 +69,10 @@ contextBridge.exposeInMainWorld('dailybrief', {
   ignoreAdd: (dir) => ipcRenderer.invoke('ignore:add', dir),
   ignoreRemove: (dir) => ipcRenderer.invoke('ignore:remove', dir),
   ignoreSearch: (query) => ipcRenderer.invoke('ignore:search', query),
+  // Work folders: roots.json entries + built-in defaults, native picker, save.
+  rootsLoad: () => ipcRenderer.invoke('roots:load'),
+  rootsPick: () => ipcRenderer.invoke('roots:pick'),
+  rootsSave: (list) => ipcRenderer.invoke('roots:save', list),
   // The AI's open questions and the user's answers to them.
   questionsLoad: () => ipcRenderer.invoke('questions:load'),
   questionsAnswer: (id, answer) => ipcRenderer.invoke('questions:answer', id, answer),

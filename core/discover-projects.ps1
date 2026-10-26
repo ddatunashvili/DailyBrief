@@ -6,7 +6,9 @@
 # directory byte-scores.
 # ASCII-only on purpose (PS 5.1 encoding).
 param(
-    [int]$MaxProjects = 40,
+    # Cap on activity-ranked projects. Projects linked to an open task are
+    # always kept on top of it (see 'pinned by open tasks' below).
+    [int]$MaxProjects = 60,
     [int]$ActiveDays  = 14
 )
 
@@ -16,14 +18,21 @@ $outFile = Join-Path $base 'projects.json'
 $utf8    = New-Object System.Text.UTF8Encoding $false
 $now     = Get-Date
 
-$roots = @(
-    "$env:USERPROFILE\OneDrive\Desktop",
-    "$env:USERPROFILE\OneDrive\Documents",
-    "$env:USERPROFILE\Desktop",
-    "$env:USERPROFILE\Documents",
-    "$env:USERPROFILE\source",
-    "$env:USERPROFILE\projects"
-) | Where-Object { Test-Path $_ }
+# Work roots: Settings > Work folders (roots.json) plus the Windows defaults
+# (no Downloads here, as before). Any drive, not only USERPROFILE.
+. (Join-Path $PSScriptRoot 'roots.ps1')
+$roots = @(Get-WorkRoots)
+# The monitor also watches Downloads, and a folder touched there has always
+# been allowed to become a project through its events - keep that.
+$eventRoots = @(Get-WorkRoots -WithDownloads)
+
+# True when $path sits strictly below one of the monitor's current roots.
+function Under-Root([string]$path) {
+    foreach ($r in $eventRoots) {
+        if ($path.StartsWith($r + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
 
 $skipRe = 'node_modules|\\\.git$|\\\.git\\|AppData|\\Temp|\\\.vscode|__pycache__|\\\.venv|\\venv|\\Recent|\$Recycle|\\\.next|\\\.nuxt|\\\.output|\\\.turbo|\\\.cache|\\dist|\\coverage|DailyBriefApp'
 
@@ -87,7 +96,7 @@ function Has-Marker([string]$dir) {
 
 $candidates = New-Object System.Collections.Generic.List[string]
 foreach ($root in $roots) {
-    foreach ($d1 in @(Get-ChildItem $root -Directory -ErrorAction SilentlyContinue)) {
+    foreach ($d1 in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)) {
         if ($d1.FullName -match $skipRe) { continue }
         if (Has-Marker $d1.FullName) { $candidates.Add($d1.FullName); continue }
         foreach ($d2 in @(Get-ChildItem $d1.FullName -Directory -ErrorAction SilentlyContinue)) {
@@ -100,7 +109,9 @@ foreach ($root in $roots) {
 # (docs, media, thesis folders) - they are real work, just not code repos.
 foreach ($g in $eventDirs) {
     $p = [string]$g.Name
-    if ($p -and (Test-Path $p) -and ($p -notmatch $skipRe)) { $candidates.Add($p) }
+    # Only while it is still under a work root: a folder removed in Settings
+    # must not linger for two weeks on the strength of its old events.
+    if ($p -and (Under-Root $p) -and (Test-Path $p) -and ($p -notmatch $skipRe)) { $candidates.Add($p) }
 }
 # Collapse to the repository root. The monitor rolls activity up to "root + 2
 # segments", which for a big repo yields RENODE PANEL\app, \storage, \public...
@@ -127,6 +138,46 @@ $candidates = @($candidates | Where-Object {
     return ($wraps.Count -eq 0)
 })
 
+# ---------- projects pinned by open tasks ----------
+# A project with an open task on the board must stay in the registry however
+# quiet it has been: every check and plan for that task reads its card. A task
+# folder counts for the deepest project that is it or contains it; one no
+# project covers becomes a project itself (its git root when it has one).
+$pinned = @{}
+$taskDirs = @()
+$kanbanPath = Join-Path $base 'kanban.json'
+if (Test-Path $kanbanPath) {
+    try {
+        $kj = ([string](Get-Content $kanbanPath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        $taskDirs = @(foreach ($t in @($kj.tasks)) {
+            if (-not $t -or $t.done -eq $true) { continue }
+            foreach ($d in @($t.dirs)) { $s = ([string]$d).Trim().TrimEnd('\'); if ($s) { $s } }
+        })
+    } catch { $taskDirs = @() }
+}
+$extra = New-Object System.Collections.Generic.List[string]
+foreach ($td in @($taskDirs | Sort-Object -Unique)) {
+    if (-not (Test-Path -LiteralPath $td -PathType Container)) { continue }
+    if (Is-Ignored $td) { continue }
+    $owner = ''
+    foreach ($c in @($candidates) + @($extra)) {
+        if ($c.Length -gt $owner.Length -and
+            ($td -eq $c -or $td.StartsWith($c + '\', [StringComparison]::OrdinalIgnoreCase))) { $owner = $c }
+    }
+    if (-not $owner) {
+        $owner = $td
+        $top = "$(git -C $td rev-parse --show-toplevel 2>$null)".Trim()
+        if ($top) {
+            $top = $top.Replace('/', '\')
+            if (Test-Path -LiteralPath $top) { $owner = $top }
+        }
+        if (($roots -contains $owner) -or (Is-Ignored $owner)) { continue }   # a work root is not a project
+        $extra.Add($owner)
+    }
+    $pinned[$owner.ToLowerInvariant()] = $true
+}
+$candidates = @(@($candidates) + @($extra))
+
 # ---------- score, then keep only the most relevant ones ----------
 function Event-Count([string]$dir) {
     $c = 0
@@ -143,8 +194,12 @@ $scored = @(foreach ($c in $candidates) {
     if (-not $li) { continue }
     [pscustomobject]@{ dir = $c; ev = (Event-Count $c); last = $li.LastWriteTime }
 })
+$rank = 0
 $picked = @($scored | Sort-Object @{e = 'ev'; Descending = $true}, @{e = 'last'; Descending = $true} |
-    Select-Object -First $MaxProjects)
+    ForEach-Object {
+        $rank++
+        if ($rank -le $MaxProjects -or $pinned.ContainsKey(([string]$_.dir).ToLowerInvariant())) { $_ }
+    })
 
 # ---------- build one card per project ----------
 function Detect-Stack([string]$dir) {

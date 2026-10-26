@@ -10,24 +10,32 @@ $outDir = Join-Path $base 'analytics'
 New-Item -ItemType Directory -Force $outDir | Out-Null
 
 $exclude = 'AppData|node_modules|\\\.git|\\Temp|C:\\Windows|Program Files|DailyBrief|\\\.vscode|__pycache__|\\\.venv|\\venv\\|\\Recent|\\\$Recycle|\\\.next|\\\.nuxt|\\\.output|\\\.turbo|\\\.cache|\\dist\\|\\coverage\\|Cache'
-$roots = @(
-    "$env:USERPROFILE\OneDrive\Desktop",
-    "$env:USERPROFILE\OneDrive\Documents",
-    "$env:USERPROFILE\Desktop",
-    "$env:USERPROFILE\Documents",
-    "$env:USERPROFILE\Downloads",
-    "$env:USERPROFILE\source",
-    "$env:USERPROFILE\projects"
-) | Where-Object { Test-Path $_ }
+# Work roots: Settings > Work folders (roots.json) plus the Windows defaults.
+# Any drive, not only USERPROFILE - G:\Desktop is as valid as Desktop.
+. (Join-Path $PSScriptRoot 'roots.ps1')
+. (Join-Path $PSScriptRoot 'walk.ps1')
+$roots = @(Get-WorkRoots -WithDownloads)
+# A root nested inside another root is already covered by the outer walk;
+# walking it again would only count every change twice.
+$walkRoots = @($roots | Where-Object {
+    $r = $_
+    -not @($roots | Where-Object { $_ -ne $r -and $r.StartsWith($_ + '\', [StringComparison]::OrdinalIgnoreCase) }).Count
+})
 
 # Roll a deep path up to project level: root + at most 2 segments below it.
+# The most specific (longest) matching root wins, so a nested work folder
+# rolls up below itself rather than below its parent root. Case-insensitive:
+# roots.json may spell a path differently from what the disk reports.
 function Get-ProjectDir([string]$dir) {
+    $best = ''
     foreach ($root in $roots) {
-        if ($dir.Length -gt $root.Length -and $dir.StartsWith($root + '\')) {
-            $rest = $dir.Substring($root.Length + 1).Split('\')
-            $take = [Math]::Min(2, $rest.Count)
-            return $root + '\' + (($rest[0..($take - 1)]) -join '\')
-        }
+        if ($dir.Length -gt $root.Length -and $root.Length -gt $best.Length -and
+            $dir.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { $best = $root }
+    }
+    if ($best) {
+        $rest = $dir.Substring($best.Length + 1).Split('\')
+        $take = [Math]::Min(2, $rest.Count)
+        return $best + '\' + (($rest[0..($take - 1)]) -join '\')
     }
     return $dir
 }
@@ -58,10 +66,11 @@ $today  = Get-Date -Format 'yyyy-MM-dd'
 $file   = Join-Path $outDir "$today.jsonl"
 $lines  = New-Object System.Collections.Generic.List[string]
 
-foreach ($root in $roots) {
-    Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.LastWriteTime -gt $cutoff -and $_.FullName -notmatch $exclude -and -not (Is-Ignored $_.DirectoryName) } |
-        Select-Object -First 500 |
+foreach ($root in $walkRoots) {
+    if (Is-Ignored $root) { continue }   # a work folder inside a muted one
+    # Pruned walk (walk.ps1): dependency/build/cache folders and muted folders
+    # are never entered, so the cost is the user's own files, not node_modules.
+    Get-RecentFiles -Root $root -Since $cutoff -Exclude $exclude -IgnoreDirs $ignoreDirs -Max 500 |
         ForEach-Object {
             $proj = Get-ProjectDir $_.DirectoryName
             $rel  = if ($_.FullName.Length -gt $proj.Length + 1) { $_.FullName.Substring($proj.Length + 1) } else { $_.Name }

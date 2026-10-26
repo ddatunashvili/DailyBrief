@@ -20,27 +20,35 @@ $ErrorActionPreference = 'SilentlyContinue'
 # only known after paths.ps1 has read DAILYBRIEF_DATA.
 if (-not $Projects) { $Projects = Join-Path $base 'projects.json' }
 $exclude = 'AppData|node_modules|\\\.git|\\Temp|C:\\Windows|Program Files|DailyBrief|\\\.vscode|__pycache__|\\\.venv|\\venv\\|\\Recent|\\\$Recycle|\\\.next|\\\.nuxt|\\\.output|\\\.turbo|\\\.cache|\\dist\\|\\coverage\\|Cache'
-$roots = @(
-    "$env:USERPROFILE\OneDrive\Desktop",
-    "$env:USERPROFILE\OneDrive\Documents",
-    "$env:USERPROFILE\Desktop",
-    "$env:USERPROFILE\Documents",
-    "$env:USERPROFILE\Downloads",
-    "$env:USERPROFILE\source",
-    "$env:USERPROFILE\projects"
-) | Where-Object { Test-Path $_ }
+# Work roots: Settings > Work folders (roots.json) plus the Windows defaults.
+# Any drive, not only USERPROFILE - G:\Desktop is as valid as Desktop.
+. (Join-Path $PSScriptRoot 'roots.ps1')
+. (Join-Path $PSScriptRoot 'walk.ps1')
+$roots = @(Get-WorkRoots -WithDownloads)
+# A root nested inside another root is already covered by the outer walk;
+# walking it again would only count every change twice.
+$walkRoots = @($roots | Where-Object {
+    $r = $_
+    -not @($roots | Where-Object { $_ -ne $r -and $r.StartsWith($_ + '\', [StringComparison]::OrdinalIgnoreCase) }).Count
+})
 
 $score = @{}
 $now = Get-Date
 
 # Roll a deep path up to "project level": root + at most 2 path segments below it.
+# The most specific (longest) matching root wins, so a nested work folder
+# rolls up below itself rather than below its parent root. Case-insensitive:
+# roots.json may spell a path differently from what the disk reports.
 function Get-ProjectDir([string]$dir) {
+    $best = ''
     foreach ($root in $roots) {
-        if ($dir.Length -gt $root.Length -and $dir.StartsWith($root + '\')) {
-            $rest = $dir.Substring($root.Length + 1).Split('\')
-            $take = [Math]::Min(2, $rest.Count)
-            return $root + '\' + (($rest[0..($take - 1)]) -join '\')
-        }
+        if ($dir.Length -gt $root.Length -and $root.Length -gt $best.Length -and
+            $dir.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { $best = $root }
+    }
+    if ($best) {
+        $rest = $dir.Substring($best.Length + 1).Split('\')
+        $take = [Math]::Min(2, $rest.Count)
+        return $best + '\' + (($rest[0..($take - 1)]) -join '\')
     }
     return $dir
 }
@@ -95,27 +103,14 @@ if (-not $Quick -and -not $ForceScan -and (Test-Path $Projects)) {
     } catch { $usedRegistry = $false }
 }
 
-# Fallback: no usable registry, so walk the disk after all - but prune the
-# excluded folders during the walk instead of enumerating them and throwing
-# the results away afterwards.
+# Fallback: no usable registry, so walk the disk after all - with the same
+# pruned walk as the monitor (walk.ps1): excluded and dependency/build folders
+# are never entered instead of enumerated and thrown away afterwards.
 if (-not $Quick -and -not $usedRegistry) {
     $cutoff = $now.AddDays(-14)
-    foreach ($root in $roots) {
-        $stack = New-Object System.Collections.Generic.Stack[string]
-        $stack.Push($root)
-        while ($stack.Count -gt 0) {
-            $dir = $stack.Pop()
-            try {
-                foreach ($sub in [IO.Directory]::EnumerateDirectories($dir)) {
-                    if ($sub -notmatch $exclude) { $stack.Push($sub) }
-                }
-                foreach ($file in [IO.Directory]::EnumerateFiles($dir)) {
-                    $ts = [IO.File]::GetLastWriteTime($file)
-                    if ($ts -gt $cutoff) {
-                        Add-Score $dir ([Math]::Max(0.2, 1 - ($now - $ts).TotalDays / 14))
-                    }
-                }
-            } catch { continue }
+    foreach ($root in $walkRoots) {
+        foreach ($f in (Get-RecentFiles -Root $root -Since $cutoff -Exclude $exclude)) {
+            Add-Score $f.DirectoryName ([Math]::Max(0.2, 1 - ($now - $f.LastWriteTime).TotalDays / 14))
         }
     }
 }
