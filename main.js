@@ -31,6 +31,7 @@ const { shardByProject } = require('./src/shard');
 const { averageByMode } = require('./src/runstats');
 const { withBoardLock } = require('./src/boardlock');
 const { mergeBoard, canon } = require('./src/boardmerge');
+const { estimateFromRuns, runKind } = require('./src/estimate');
 const { defaultRoots, effectiveRoots, describeRoots, cleanUserRoots, cleanDisabled, readRootsConfig, writeRootsFile } = require('./src/roots');
 
 // Two roots, and they must not be confused.
@@ -958,31 +959,24 @@ const EST_DEFAULTS = {
   execute: { inputTokens: 40000, outputTokens: 10000, costUsd: 1.00 }
 };
 
-function estimateRun(mode) {
-  const same = readRuns().filter((r) =>
-    r.mode === mode && r.status === 'ok' && ((r.inputTokens || 0) + (r.outputTokens || 0) > 0 || (r.costUsd || 0) > 0)
-  ).slice(-10);
-  if (same.length) {
-    const avg = (k) => Math.round(same.reduce((s, r) => s + (r[k] || 0), 0) / same.length);
-    return {
-      inputTokens: avg('inputTokens'),
-      outputTokens: avg('outputTokens'),
-      costUsd: same.reduce((s, r) => s + (r.costUsd || 0), 0) / same.length,
-      durationSec: avg('durationSec'),
-      source: 'history'
-    };
-  }
+// ctx = the run's own shape ({ taskId, scope, batchId, variant }), so a 6 s
+// per-project check is not estimated from 30 s whole-board ones (src\estimate.js).
+function estimateRun(mode, ctx) {
+  const hist = estimateFromRuns(readRuns(), mode, ctx || {});
+  if (hist) return hist;
   const d = EST_DEFAULTS[mode] || EST_DEFAULTS.check;
-  // Seeds only: after a few runs the journal's own average takes over. One
-  // lean model turn is well under a minute for everything but the brief and
-  // execution.
+  // Seeds only: after two lean runs the journal's own median takes over.
+  // Measured on the lean runner: one model turn is 10-35 s for everything
+  // but the brief and execution.
   const durations = {
-    full: 60, replan: 50, check: 30, 'task-replan': 30,
-    'task-generate': 35, 'task-command': 30, ask: 35, ideas: 40, execute: 600
+    full: 35, replan: 15, check: 15, 'task-replan': 15,
+    'task-generate': 25, 'task-command': 12, ask: 20, ideas: 25, execute: 600
   };
+  const checkKind = { task: 12, shard: 10, newtasks: 8, board: 15 };
+  const dur = mode === 'check' ? checkKind[runKind(ctx)] : durations[mode];
   return {
     inputTokens: d.inputTokens, outputTokens: d.outputTokens, costUsd: d.costUsd,
-    durationSec: durations[mode] || 120, source: 'default'
+    durationSec: dur || 60, source: 'default'
   };
 }
 
@@ -1433,7 +1427,13 @@ function startCheck(opts) {
   const run = {
     id, mode, taskId: taskId || null, pid: ps.pid, startedAt: Date.now(),
     logFile,
-    killed: false, exclusive: false, est: estimateRun(mode),
+    killed: false, exclusive: false,
+    est: estimateRun(mode, {
+      taskId: taskId || null,
+      scope: (batch && batch.scope) || null,
+      batchId: (batch && batch.id) || null,
+      variant: newTasksOnly ? 'newtasks' : null
+    }),
     scope: (batch && batch.scope) || null,
     batchId: (batch && batch.id) || null,
     batchIndex: (batch && batch.index) || 0,
