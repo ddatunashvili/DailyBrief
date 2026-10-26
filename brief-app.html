@@ -3168,7 +3168,7 @@ const BRIEF = {
         });
       }));
       row.appendChild(wfBtn("x", "Stop scanning this folder", function () {
-        saveRoots(userDirs.filter(function (d) { return d.toLowerCase() !== key; }), "Removed.", null, offDirs);
+        saveRoots(userDirs.filter(function (d) { return d.toLowerCase() !== key; }), "Removed - its projects leave the list at the next scan (within 30 min).", null, offDirs);
       }));
       box.appendChild(row);
     });
@@ -3195,7 +3195,7 @@ const BRIEF = {
           changeRoot(function (dir) { return { list: userDirs.concat([dir]), off: offDirs.concat([d]) }; });
         }));
         row.appendChild(wfBtn("x", "Stop scanning this folder", function () {
-          saveRoots(userDirs, "Turned off.", null, offDirs.concat([d]));
+          saveRoots(userDirs, "Turned off - its projects leave the list at the next scan (within 30 min).", null, offDirs.concat([d]));
         }));
       }
       box.appendChild(row);

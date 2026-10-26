@@ -640,15 +640,20 @@ ipcMain.handle('roots:save', (ev, list, disabled) => {
   let error = '';
   const eq = (a, b) => a.length === b.length && a.every((p, i) => p.toLowerCase() === b[i].toLowerCase());
   const same = eq(before.roots, next) && eq(before.disabled, nextOff);
+  // Rescan only when the walk gained a folder. Removing or switching one off
+  // just saves: its projects drop out at the regular 30-minute scan, and a
+  // full rescan for a removal was minutes of disk walking for nothing new.
+  const effBefore = new Set(effectiveRoots(before.roots, rootDefaults(true), null, before.disabled).map((p) => p.toLowerCase()));
+  const gained = effectiveRoots(next, rootDefaults(true), null, nextOff).some((p) => !effBefore.has(p.toLowerCase()));
   if (!same) {
     try { writeRootsFile(ROOTS_FILE, next, nextOff); } catch (e) { error = String(e && e.message || e); }
-    if (!error) {
-      dirCache = { at: 0, dirs: [] };
+    dirCache = { at: 0, dirs: [] };
+    if (!error && gained) {
       runDiscover({ again: true, withDirs: true });
       runMonitor();
     }
   }
-  return Object.assign(rootsView(), { changed: !same && !error, error });
+  return Object.assign(rootsView(), { changed: !same && !error && gained, error });
 });
 
 /* Ignored folders: everything under one of these paths is invisible to the
