@@ -11,7 +11,11 @@
 // files and keeps working.
 //
 // The pure parts live in src\: text repair and json reading (text.js), the kv
-// store (kv.js), run-file pruning (prune.js), the zoom ladder (zoom.js).
+// store (kv.js), run-file pruning (prune.js), the zoom ladder (zoom.js), the
+// concurrency limiter (queue.js), the per-project split of a whole-board check
+// (shard.js), the per-mode run averages for the AI page (runstats.js) and the
+// board lock shared with every PowerShell script (boardlock.js), and the
+// three-way merge of a board save against what scripts wrote (boardmerge.js).
 
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
@@ -22,6 +26,11 @@ const { DATE_RE, listDates, deepFixMojibake, readJson } = require('./src/text');
 const { initKv, kvReady, kvClose, kvGet, kvSet, kvKeys } = require('./src/kv');
 const { pruneRunFiles: pruneDir } = require('./src/prune');
 const { ZOOM_STEPS, clampZoom, nextZoom } = require('./src/zoom');
+const { createLimiter } = require('./src/queue');
+const { shardByProject } = require('./src/shard');
+const { averageByMode } = require('./src/runstats');
+const { withBoardLock } = require('./src/boardlock');
+const { mergeBoard, canon } = require('./src/boardmerge');
 
 // Two roots, and they must not be confused.
 //
@@ -55,6 +64,8 @@ const DISCOVER_SCRIPT = path.join(CORE_DIR, 'discover-projects.ps1');
 const ASK_SCRIPT = path.join(CORE_DIR, 'ask.ps1');
 // The only run that edits a real project: own branch, VS Code, Bash.
 const EXECUTE_SCRIPT = path.join(CORE_DIR, 'execute.ps1');
+// Daily board housekeeping (no AI): keeps kanban.json from growing forever.
+const COMPACT_SCRIPT = path.join(CORE_DIR, 'compact-kanban.ps1');
 
 // Data: user side.
 const BRIEFS_DIR = path.join(DATA, 'briefs');
@@ -62,6 +73,9 @@ const LEGACY_DIR = path.join(DATA, 'briefings');
 const DONE_DIR = path.join(DATA, 'done');
 const PLANS_FILE = path.join(DATA, 'plans.json');
 const KANBAN_FILE = path.join(DATA, 'kanban.json');
+// Where compact-kanban.ps1 moves tasks finished or deleted more than 30 days
+// ago: { tasks: [done tasks], archive: [deleted tasks], notes: [old aiNotes] }.
+const KANBAN_ARCHIVE_FILE = path.join(DATA, 'kanban-archive.json');
 const PROJECTS_FILE = path.join(DATA, 'projects.json');
 const ASK_LOG_FILE = path.join(DATA, 'ask-log.json');
 const IDEAS_FILE = path.join(DATA, 'ideas.json');
@@ -149,6 +163,28 @@ seedDataFiles();
 // Run files pile up in the data folder; the module decides which families
 // exist and how many of each to keep.
 function pruneRunFiles() { pruneDir(DATA); }
+
+/* Every read-modify-write of kanban.json / questions.json / ideas.json runs
+   under the board lock (src\boardlock.js = core\lock.ps1), because parallel
+   AI runs apply their patches to the same files. The body re-reads the file
+   inside the lock. If the lock cannot be had, nothing is written - an
+   unlocked write is exactly the lost update the lock exists to prevent - and
+   the user gets an error toast instead (quiet: the caller reports it
+   itself). Resolves to the body's result, or LOCK_BUSY. */
+const LOCK_BUSY = Symbol('board lock busy');
+
+function lockedBoardWrite(what, fn, quiet) {
+  return withBoardLock(DATA, fn).catch((err) => {
+    if (!err || err.code !== 'EBOARDLOCK') throw err;
+    if (!quiet) reportProblem({
+      id: 'lock-' + crypto.randomUUID().slice(0, 6), at: new Date().toISOString(),
+      mode: 'board', taskId: null, status: 'failed', level: 'error', durationSec: 0,
+      message: 'The board is busy (an AI run is saving it) - ' + what + ' was not saved. Try again in a moment.',
+      detail: err.message
+    });
+    return LOCK_BUSY;
+  });
+}
 
 /* ---------- SQLite (this user's dailybrief.db) ---------- */
 
@@ -240,7 +276,7 @@ ipcMain.handle('brief:saveDone', async (ev, date, state) => {
 });
 
 ipcMain.handle('brief:replan', () => {
-  if (pipelineRunning || activeRuns.size > 0) return false;
+  if (pipelineRunning || activeRuns.size > 0 || checkBatch) return false;
   runPipeline(true);
   return true;
 });
@@ -319,16 +355,66 @@ function sanitizeKanban(data) {
   return { tasks: cleanList(data && data.tasks, false), archive: cleanList(data && data.archive, true) };
 }
 
+/* Board revisions. The page sends the whole board back on every save, but
+   AI runs patch kanban.json while the page is open, so writing the page's
+   copy as-is dropped their work. Every board handed to the page (load, or
+   the result of a save) is remembered under a revision number the page
+   echoes back; a save is then a three-way merge: base = that revision,
+   mine = the page's board, theirs = the file re-read under the lock. */
+const BOARD_REVS_KEPT = 20;
+const boardRevs = new Map(); // rev -> board snapshot as served
+let boardRev = 0;
+
+function rememberBoard(board) {
+  boardRev++;
+  boardRevs.set(boardRev, JSON.parse(JSON.stringify(board)));
+  while (boardRevs.size > BOARD_REVS_KEPT) boardRevs.delete(boardRevs.keys().next().value);
+  return boardRev;
+}
+
+// The fields the page owns: exactly what sanitizeKanban keeps.
+const KANBAN_FIELDS = ['id', 'title', 'desc', 'status', 'done', 'createdBy', 'createdAt', 'updatedAt',
+  'comments', 'aiNotes', 'dirs', 'subtasks', 'planRequested', 'archivedAt'];
+
+// What the page's sanitizer would make of a base task, so its trims (last 10
+// notes, 100 comments...) never read as user edits in the merge.
+function normalizeTask(t) {
+  const out = sanitizeKanban({ tasks: [t] }).tasks[0];
+  if (out && t && t.archivedAt) out.archivedAt = t.archivedAt;
+  return out;
+}
+
 ipcMain.handle('kanban:load', () => {
   const cached = kvGet('kanban');
-  if (cached && Array.isArray(cached.tasks)) return cached;
-  return readKanbanFile() || { tasks: [], archive: [] };
+  const board = (cached && Array.isArray(cached.tasks)) ? cached : (readKanbanFile() || { tasks: [], archive: [] });
+  return Object.assign({}, board, { rev: rememberBoard(board) });
 });
 
-ipcMain.handle('kanban:save', (ev, data) => {
+ipcMain.handle('kanban:save', async (ev, data) => {
   const clean = sanitizeKanban(data);
-  kvSet('kanban', clean);
-  fs.writeFileSync(KANBAN_FILE, JSON.stringify(clean, null, 2), 'utf8');
+  const rev = Number(data && data.rev);
+  // An unknown revision (very old page, or one evicted) falls back to the
+  // newest board served - the closest thing to what the page started from.
+  const base = boardRevs.get(rev) || (boardRev ? boardRevs.get(boardRev) : null);
+  let merged = null;
+  const saved = await lockedBoardWrite('your board change', () => {
+    let theirs = readJson(KANBAN_FILE);
+    // An unreadable file must not read as "a script deleted every task":
+    // with theirs = base the merge reduces to the page's own board.
+    if (!theirs || !Array.isArray(theirs.tasks)) theirs = base || clean;
+    merged = mergeBoard(base || theirs, clean, theirs, { mineFields: KANBAN_FIELDS, normalize: normalizeTask });
+    fs.writeFileSync(KANBAN_FILE, JSON.stringify(merged, null, 2), 'utf8');
+  }, true);
+  if (saved === LOCK_BUSY) return false;
+  kvSet('kanban', merged);
+  // Hand the merged board back, so the screen matches the disk. The page
+  // takes it only if the user has not edited again meanwhile; if they have,
+  // its next save still merges against the older revision correctly.
+  const newRev = rememberBoard(merged);
+  const changed = canon(sanitizeKanban(merged)) !== canon(clean);
+  if (win && !win.isDestroyed()) {
+    try { win.webContents.send('kanban:updated', { rev: newRev, board: changed ? merged : null }); } catch (e) {}
+  }
   // A user comment is an order inside that task's scope, not a sticky note:
   // every task carrying an unhandled comment gets its own tiny AI run.
   // The comment stays "new" until the run acks it in kanban.json, so any save
@@ -336,7 +422,7 @@ ipcMain.handle('kanban:save', (ev, data) => {
   const commanding = new Set(Array.from(activeRuns.values())
     .filter((r) => r.mode === 'task-command')
     .map((r) => r.taskId));
-  clean.tasks
+  merged.tasks
     .filter((t) => !commanding.has(t.id))
     .filter((t) => (t.comments || []).some((c) => c.by === 'user' && c.state === 'new'))
     .slice(0, MAX_CONCURRENT_AI)
@@ -344,25 +430,95 @@ ipcMain.handle('kanban:save', (ev, data) => {
   return true;
 });
 
+/* The long-term archive (kanban-archive.json). The Archive page lists it
+   next to the board's own archive; restoring moves a task back onto the
+   board, and both files are written inside the board lock. */
+function readArchiveStore() {
+  const s = readJson(KANBAN_ARCHIVE_FILE);
+  const arr = (v) => (Array.isArray(v) ? v : []);
+  return { tasks: arr(s && s.tasks), archive: arr(s && s.archive), notes: arr(s && s.notes) };
+}
+
+ipcMain.handle('kanban:archiveLoad', () => {
+  const s = readArchiveStore();
+  // The page gets what it renders; old notes stay in the file.
+  return { tasks: s.tasks, archive: s.archive };
+});
+
+ipcMain.handle('kanban:archiveRestore', async (ev, taskId) => {
+  const id = String(taskId || '');
+  if (!id) return false;
+  const r = await lockedBoardWrite('the restore', () => {
+    const store = readArchiveStore();
+    const t = store.tasks.find((x) => x && String(x.id) === id) || store.archive.find((x) => x && String(x.id) === id);
+    if (!t) return false;
+    const board = readJson(KANBAN_FILE);
+    if (!board || !Array.isArray(board.tasks)) return false;
+    if (!Array.isArray(board.archive)) board.archive = [];
+    // Back on the board, open again - the same thing the short-term archive's
+    // restore does. Its old notes come back with it.
+    const back = Object.assign({}, t, { done: false, updatedAt: new Date().toISOString() });
+    delete back.archivedAt;
+    delete back.compactedAt;
+    const notes = store.notes.filter((n) => n && String(n.taskId) === id).map((n) => ({ text: n.text, at: n.at }));
+    if (notes.length) back.aiNotes = notes.concat(Array.isArray(back.aiNotes) ? back.aiNotes : []);
+    board.tasks = board.tasks.filter((x) => !x || String(x.id) !== id).concat([back]);
+    board.archive = board.archive.filter((x) => !x || String(x.id) !== id);
+    store.tasks = store.tasks.filter((x) => !x || String(x.id) !== id);
+    store.archive = store.archive.filter((x) => !x || String(x.id) !== id);
+    store.notes = store.notes.filter((n) => !n || String(n.taskId) !== id);
+    // Board first: a crash between the two writes leaves the task in both
+    // files (the page hides archive copies of tasks on the board), never in
+    // neither.
+    fs.writeFileSync(KANBAN_FILE, JSON.stringify(board, null, 2), 'utf8');
+    fs.writeFileSync(KANBAN_ARCHIVE_FILE, JSON.stringify(store, null, 2), 'utf8');
+    kvSet('kanban', board);
+    return true;
+  });
+  return r === true;
+});
+
+ipcMain.handle('kanban:archiveDelete', async (ev, taskId) => {
+  const id = String(taskId || '');
+  if (!id) return false;
+  const r = await lockedBoardWrite('the delete', () => {
+    const store = readArchiveStore();
+    const before = store.tasks.length + store.archive.length;
+    store.tasks = store.tasks.filter((x) => !x || String(x.id) !== id);
+    store.archive = store.archive.filter((x) => !x || String(x.id) !== id);
+    if (store.tasks.length + store.archive.length === before) return false;
+    store.notes = store.notes.filter((n) => !n || String(n.taskId) !== id);
+    fs.writeFileSync(KANBAN_ARCHIVE_FILE, JSON.stringify(store, null, 2), 'utf8');
+    return true;
+  });
+  return r === true;
+});
+
 // Opening a task with an empty checklist plans it once, automatically —
 // the user should never have to press "replan" to get a first plan.
-ipcMain.handle('kanban:ensurePlan', (ev, taskId) => {
+ipcMain.handle('kanban:ensurePlan', async (ev, taskId) => {
   const id = String(taskId || '').slice(0, 60);
   if (!id) return false;
-  const board = kvGet('kanban') || readKanbanFile();
-  if (!board) return false;
-  const t = (board.tasks || []).find((x) => x.id === id);
-  if (!t || t.done || t.planRequested) return false;
-  if ((t.subtasks || []).length > 0) return false;
   // Mark first: the run is async and the board reloads when it lands, so the
-  // flag is what stops a second open from firing another run.
-  t.planRequested = true;
-  kvSet('kanban', board);
-  try { fs.writeFileSync(KANBAN_FILE, JSON.stringify(board, null, 2), 'utf8'); } catch (e) {}
+  // flag is what stops a second open from firing another run. Read inside the
+  // lock, from the file: the cached copy may predate a script's patch.
+  const marked = await lockedBoardWrite('the task plan request', () => {
+    const board = readKanbanFile() || kvGet('kanban');
+    if (!board) return false;
+    const t = (board.tasks || []).find((x) => x.id === id);
+    if (!t || t.done || t.planRequested) return false;
+    if ((t.subtasks || []).length > 0) return false;
+    t.planRequested = true;
+    fs.writeFileSync(KANBAN_FILE, JSON.stringify(board, null, 2), 'utf8');
+    kvSet('kanban', board);
+    return true;
+  }).catch(() => false);
+  if (marked !== true) return false;
   return runCheck(id, true, false, false);
 });
 
-ipcMain.handle('kanban:check', () => runCheck('', false, false));
+// The board header's check: every open task, one small run per project.
+ipcMain.handle('kanban:check', () => runCheckBatch());
 
 ipcMain.handle('kanban:taskCheck', (ev, taskId) => (taskId ? runCheck(String(taskId).slice(0, 60), false, false) : false));
 
@@ -537,14 +693,17 @@ function readQuestions() {
 
 ipcMain.handle('questions:load', () => readQuestions());
 
-ipcMain.handle('questions:answer', (ev, id, answer) => {
-  const qs = readQuestions();
-  const q = qs.find((x) => x.id === String(id || ''));
-  if (!q) return false;
-  q.answer = String(answer || '').slice(0, 1000);
-  q.answeredAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  fs.writeFileSync(QUESTIONS_FILE, JSON.stringify({ questions: qs }, null, 2), 'utf8');
-  return true;
+ipcMain.handle('questions:answer', async (ev, id, answer) => {
+  const r = await lockedBoardWrite('your answer', () => {
+    const qs = readQuestions();
+    const q = qs.find((x) => x.id === String(id || ''));
+    if (!q) return false;
+    q.answer = String(answer || '').slice(0, 1000);
+    q.answeredAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    fs.writeFileSync(QUESTIONS_FILE, JSON.stringify({ questions: qs }, null, 2), 'utf8');
+    return true;
+  });
+  return r === true;
 });
 
 /* Settings: small key/value bag kept in the app database. */
@@ -633,8 +792,24 @@ ipcMain.handle('dialog:pickFolder', async () => {
    show and cancel them individually. The daily pipeline (full/replan) stays
    exclusive — it rewrites kanban.json wholesale via Claude's own Write tool,
    so it must never overlap with anything else that touches the board. */
-const MAX_CONCURRENT_AI = 4;
-const activeRuns = new Map(); // id -> { id, mode, taskId, pid, startedAt, logFile, killed, exclusive, est }
+// Lean runs (one model turn, ~1k baseline tokens) made the pool cheap, so it
+// is wide enough for a full background batch (3) plus whatever the user starts.
+const MAX_CONCURRENT_AI = 6;
+// Background fan-out: a whole-board check split per project, and the daily
+// idea refills. Each gets at most 3 processes; the board mutex in core\lock.ps1
+// serializes their writes to kanban.json / ideas.json.
+const BATCH_CONCURRENCY = 3;
+const checkLimiter = createLimiter(BATCH_CONCURRENCY);
+const ideasLimiter = createLimiter(BATCH_CONCURRENCY);
+// A queued job whose run cannot get a pool slot retries this often, for this
+// long, then gives up quietly (the next batch picks the work up again).
+const SLOT_RETRY_MS = 5000;
+const SLOT_WAIT_MS = 15 * 60 * 1000;
+const activeRuns = new Map(); // id -> { id, mode, taskId, pid, startedAt, logFile, killed, exclusive, est, scope, batchId }
+// The whole-board check in flight: { id, total, started, finished, cancelled }.
+// Set for the batch's whole life - including the gaps between shards - so a
+// second batch, the daily pipeline and the board reload all wait for it.
+let checkBatch = null;
 let pipelineRunning = false;
 let reloadTimer = null;
 
@@ -648,10 +823,17 @@ function scheduleReload() {
   }, 1500);
 }
 
+function runStatus(r) {
+  return {
+    id: r.id, mode: r.mode, taskId: r.taskId || null, startedAt: r.startedAt, est: r.est,
+    scope: r.scope || null,
+    batch: r.batchId && checkBatch && checkBatch.id === r.batchId
+      ? { index: r.batchIndex, total: checkBatch.total } : null
+  };
+}
+
 function broadcastAiStatus() {
-  const list = Array.from(activeRuns.values()).map((r) => ({
-    id: r.id, mode: r.mode, taskId: r.taskId || null, startedAt: r.startedAt, est: r.est
-  }));
+  const list = Array.from(activeRuns.values()).map(runStatus);
   if (win && !win.isDestroyed()) {
     try { win.webContents.send('ai:status', list); } catch (e) { /* window closing */ }
   }
@@ -668,21 +850,23 @@ function readRuns() {
   }
 }
 
-// full/replan run on sonnet (quality), checks on haiku (speed/price).
+// full/replan run on sonnet (quality), checks on haiku (speed/price). Seeds
+// for the lean runner (core\claude-run.ps1): ~1k baseline tokens and a single
+// turn instead of a full ~30k-token Claude Code session per call.
 const EST_DEFAULTS = {
-  full: { inputTokens: 25000, outputTokens: 6000, costUsd: 0.45 },
-  replan: { inputTokens: 12000, outputTokens: 3000, costUsd: 0.20 },
-  check: { inputTokens: 8000, outputTokens: 2000, costUsd: 0.05 },
-  'task-replan': { inputTokens: 8000, outputTokens: 1500, costUsd: 0.04 },
-  'task-generate': { inputTokens: 6000, outputTokens: 1200, costUsd: 0.03 },
-  'task-command': { inputTokens: 5000, outputTokens: 1200, costUsd: 0.03 },
+  full: { inputTokens: 20000, outputTokens: 4000, costUsd: 0.08 },
+  replan: { inputTokens: 12000, outputTokens: 2500, costUsd: 0.06 },
+  check: { inputTokens: 6000, outputTokens: 1500, costUsd: 0.01 },
+  'task-replan': { inputTokens: 5000, outputTokens: 1200, costUsd: 0.01 },
+  'task-generate': { inputTokens: 6000, outputTokens: 1200, costUsd: 0.02 },
+  'task-command': { inputTokens: 5000, outputTokens: 1000, costUsd: 0.01 },
   // Read-only runs: a question about the registry, and 3 feature ideas for
   // one project. Both on sonnet — this is where a cheaper model shows.
-  ask: { inputTokens: 7000, outputTokens: 900, costUsd: 0.04 },
-  ideas: { inputTokens: 3000, outputTokens: 1300, costUsd: 0.03 },
-  // Up to 40 turns of reading files and running commands inside a real repo:
+  ask: { inputTokens: 8000, outputTokens: 1000, costUsd: 0.03 },
+  ideas: { inputTokens: 6000, outputTokens: 1300, costUsd: 0.03 },
+  // Many turns of reading files and running commands inside a real repo:
   // an order of magnitude above every other run, in time and in money.
-  execute: { inputTokens: 60000, outputTokens: 15000, costUsd: 2.00 }
+  execute: { inputTokens: 40000, outputTokens: 10000, costUsd: 1.00 }
 };
 
 function estimateRun(mode) {
@@ -700,12 +884,12 @@ function estimateRun(mode) {
     };
   }
   const d = EST_DEFAULTS[mode] || EST_DEFAULTS.check;
-  // Seeds only: after a few runs the journal's own average takes over. full
-  // and replan dropped to a minute once the digest replaced the model's own
-  // file reads, so the old 7-minute seed made every morning look overdue.
+  // Seeds only: after a few runs the journal's own average takes over. One
+  // lean model turn is well under a minute for everything but the brief and
+  // execution.
   const durations = {
-    full: 90, replan: 70, check: 90, 'task-replan': 100,
-    'task-generate': 90, 'task-command': 80, ask: 70, ideas: 70, execute: 900
+    full: 60, replan: 50, check: 30, 'task-replan': 30,
+    'task-generate': 35, 'task-command': 30, ask: 35, ideas: 40, execute: 600
   };
   return {
     inputTokens: d.inputTokens, outputTokens: d.outputTokens, costUsd: d.costUsd,
@@ -957,6 +1141,11 @@ function recordRun(run, exitCode) {
     costUsd: usage.stale ? 0 : usage.costUsd,
     exitCode: exitCode || 0
   };
+  // A per-project shard of a whole-board check says which project it covered.
+  if (run.scope) entry.scope = run.scope;
+  if (run.batchId) entry.batchId = run.batchId;
+  // Same mode, different prompt: the batch's closing new-task pass.
+  if (run.variant) entry.variant = run.variant;
   try { fs.appendFileSync(AI_RUNS_FILE, JSON.stringify(entry) + '\n', 'utf8'); } catch (e) {}
   if (verdict.level !== 'info') {
     reportProblem(Object.assign({}, entry, {
@@ -996,6 +1185,8 @@ function runWatchdog() {
 setInterval(runWatchdog, 5000);
 
 ipcMain.handle('ai:runs', () => readRuns().slice(-100).reverse());
+// Average of the last 10 model-reaching runs per mode: tokens and seconds.
+ipcMain.handle('ai:averages', () => averageByMode(readRuns().slice(-500), 10));
 ipcMain.handle('ai:problems', () => readProblems().slice(-60).reverse());
 
 /* One file to send on: every recent problem plus the tail of each log it
@@ -1047,17 +1238,23 @@ ipcMain.handle('ai:openContext', () => {
   const last = readRuns().slice(-1)[0] || {};
   const mode = (running && running.mode) || last.mode || 'check';
   const runId = (running && running.id) || last.id || '';
+  const variant = running ? running.variant : last.variant;
+  // Execute plans first, then works: both prompts are part of its context.
   const promptFiles = {
-    full: 'prompt.md', replan: 'prompt-replan.md',
-    check: 'prompt-check.md', 'task-replan': 'prompt-task-replan.md',
-    'task-generate': 'prompt-task-generate.md', 'task-command': 'prompt-task-command.md',
-    ask: 'prompt-ask.md', ideas: 'prompt-ideas.md', execute: 'prompt-execute.md'
+    full: ['prompt.md'], replan: ['prompt-replan.md'],
+    check: ['prompt-check.md'], 'task-replan': ['prompt-task-replan.md'],
+    'task-generate': ['prompt-task-generate.md'], 'task-command': ['prompt-task-command.md'],
+    ask: ['prompt-ask.md'], ideas: ['prompt-ideas.md'],
+    execute: ['prompt-execute-plan.md', 'prompt-execute.md']
   };
-  const pf = promptFiles[mode] || 'prompt-check.md';
-  const parts = ['=== mode: ' + mode + ' ===', ''];
-  parts.push('=== PROMPT (' + pf + ') ===');
-  try { parts.push(fs.readFileSync(path.join(CORE_DIR, pf), 'utf8')); }
-  catch (e) { parts.push('(file not found)'); }
+  const pfs = variant === 'newtasks' ? ['prompt-task-newtasks.md'] : (promptFiles[mode] || ['prompt-check.md']);
+  const parts = ['=== mode: ' + mode + (variant ? ' (' + variant + ')' : '') + ' ===', ''];
+  pfs.forEach((pf, i) => {
+    if (i) parts.push('');
+    parts.push('=== PROMPT (' + pf + ') ===');
+    try { parts.push(fs.readFileSync(path.join(CORE_DIR, pf), 'utf8')); }
+    catch (e) { parts.push('(file not found)'); }
+  });
   if (mode === 'execute') {
     // No digest file: the brief is assembled from the task card itself and
     // handed to the model on stdin, inside the project folder.
@@ -1087,20 +1284,33 @@ ipcMain.handle('ai:kill', (ev, runId) => {
   const run = activeRuns.get(String(runId || ''));
   if (!run) return false;
   run.killed = true;
+  // Stopping one shard of a whole-board check stops the batch: the shards
+  // still waiting for a slot are dropped, the ones already running finish.
+  if (run.batchId && checkBatch && checkBatch.id === run.batchId) {
+    checkBatch.cancelled = true;
+    checkLimiter.clear();
+  }
   // Kill the whole tree: powershell -> claude.cmd -> node.
   spawn('taskkill', ['/PID', String(run.pid), '/T', '/F'], PS_OPTS);
   return true;
 });
 
-ipcMain.handle('ai:status', () => Array.from(activeRuns.values()).map((r) => ({
-  id: r.id, mode: r.mode, taskId: r.taskId || null, startedAt: r.startedAt, est: r.est
-})));
+ipcMain.handle('ai:status', () => Array.from(activeRuns.values()).map(runStatus));
 
 // taskId/replan/generate: which check-family flavor to run. Concurrent with
 // each other (capped at MAX_CONCURRENT_AI), always exclusive with the daily
 // pipeline (full/replan) since that rewrites kanban.json wholesale.
 function runCheck(taskId, replan, generate, command, taskIds) {
-  if (pipelineRunning || activeRuns.size >= MAX_CONCURRENT_AI) return false;
+  return !!startCheck({ taskId, replan, generate, command, taskIds });
+}
+
+// The spawn behind runCheck. Returns the run, or null when there is no slot.
+// opts.onExit(code) fires once the run is over (exit or spawn failure);
+// opts.batch = { id, index, scope } marks a shard of a whole-board check,
+// which leaves the board reload to the batch so it happens once, not N times.
+function startCheck(opts) {
+  const { taskId, replan, generate, command, taskIds, newTasksOnly, batch, onExit } = opts || {};
+  if (pipelineRunning || activeRuns.size >= MAX_CONCURRENT_AI) return null;
   const mode = command ? 'task-command'
     : (generate ? 'task-generate' : (replan ? 'task-replan' : 'check'));
   const id = crypto.randomUUID().slice(0, 8);
@@ -1113,16 +1323,29 @@ function runCheck(taskId, replan, generate, command, taskIds) {
   if (replan) args.push('-Replan');
   if (generate) args.push('-Generate');
   if (command) args.push('-Command');
+  // Whole-board new-task pass only (no per-task updates): the last step of a
+  // per-project check batch, since scoped runs never propose new tasks.
+  if (newTasksOnly && !taskId && !(taskIds && taskIds.length)) args.push('-NewTasksOnly');
   const logFile = freshLog(path.join(DATA, `check-run-${id}.log`));
   const ps = spawn('powershell.exe', args, PS_OPTS);
   const run = {
     id, mode, taskId: taskId || null, pid: ps.pid, startedAt: Date.now(),
     logFile,
-    killed: false, exclusive: false, est: estimateRun(mode)
+    killed: false, exclusive: false, est: estimateRun(mode),
+    scope: (batch && batch.scope) || null,
+    batchId: (batch && batch.id) || null,
+    batchIndex: (batch && batch.index) || 0,
+    variant: newTasksOnly ? 'newtasks' : null
   };
   activeRuns.set(id, run);
   broadcastAiStatus();
-  ps.on('error', (err) => { activeRuns.delete(id); reportSpawnFailure(run, err); broadcastAiStatus(); });
+  let over = false;
+  const done = (code) => {
+    if (over) return;
+    over = true;
+    if (onExit) { try { onExit(code); } catch (e) { /* the caller's problem */ } }
+  };
+  ps.on('error', (err) => { activeRuns.delete(id); reportSpawnFailure(run, err); broadcastAiStatus(); done(-1); });
   ps.on('exit', async (code) => {
     activeRuns.delete(id);
     recordRun(run, code);
@@ -1130,6 +1353,80 @@ function runCheck(taskId, replan, generate, command, taskIds) {
     try { syncFilesToDb(); } catch (e) { /* file fallback still works */ }
     // A comment may have asked for the work itself, not just a new plan.
     if (mode === 'task-command') { try { consumeExecuteRequest(); } catch (e) {} }
+    if (!run.batchId) scheduleReload();
+    done(code);
+  });
+  return run;
+}
+
+/* A queued background job needs a pool slot, and the pool may be full of the
+   user's own runs (or paused for the daily pipeline). Retry until one frees up;
+   after SLOT_WAIT_MS give up - the work is not lost, the next batch redoes it.
+   start(onExit) returns the run or null; the promise resolves when the run is
+   over (its exit code), or with null if it never started. */
+function startWhenFree(start, isCancelled) {
+  const giveUpAt = Date.now() + SLOT_WAIT_MS;
+  return new Promise((resolve) => {
+    const attempt = () => {
+      if (isCancelled && isCancelled()) return resolve(null);
+      const run = start(resolve);
+      if (run) return;
+      if (Date.now() > giveUpAt) return resolve(null);
+      setTimeout(attempt, SLOT_RETRY_MS);
+    };
+    attempt();
+  });
+}
+
+/* Whole-board check, split per project. One kanban-check.ps1 run looked at
+   every open task at once: a big digest, one slow model call, and one bad
+   answer cost the whole board. Now each project's open tasks go to their own
+   `-TaskIds` run (target SCOPED in the digest), at most BATCH_CONCURRENCY at a
+   time. The script applies each patch under the board mutex, so the shards
+   never drop each other's changes, and each one is tracked, journaled and
+   killable like any other run.
+
+   newTasks: a scoped run never proposes new tasks (it has not seen the rest of
+   the board), so once every shard is done ONE more run, `-NewTasksOnly`, looks
+   at the whole board for a working folder no task covers yet. The script
+   short-circuits with zero model calls when there is none. It is part of the
+   same batch (counted in n/m, journaled, killable) and runs whatever the
+   auto-generate setting says - the old unscoped check did too. The page
+   reloads once, after that last run. */
+function runCheckBatch() {
+  if (checkBatch || pipelineRunning) return false;
+  // A plain whole-board check already in flight covers the same ground.
+  for (const r of activeRuns.values()) if (r.mode === 'check' && !r.taskId && !r.batchId) return false;
+  const board = kvGet('kanban') || readKanbanFile();
+  // An empty board still gets the new-task pass: it is where one helps most.
+  const shards = shardByProject(board && board.tasks);
+  const batch = {
+    id: 'b' + crypto.randomUUID().slice(0, 7),
+    total: shards.length + 1, started: 0, finished: 0, cancelled: false
+  };
+  checkBatch = batch;
+  const jobs = shards.map((s, i) => checkLimiter.run(() => startWhenFree((onExit) => {
+    const run = startCheck({
+      taskIds: s.ids, onExit,
+      batch: { id: batch.id, index: i + 1, scope: s.name }
+    });
+    if (run) batch.started++;
+    return run;
+  }, () => batch.cancelled)));
+  Promise.allSettled(jobs).then(() => (batch.cancelled ? null : startWhenFree((onExit) => {
+    const run = startCheck({
+      newTasksOnly: true, onExit,
+      batch: { id: batch.id, index: batch.total, scope: 'new tasks' }
+    });
+    if (run) batch.started++;
+    return run;
+  }, () => batch.cancelled))).then(() => {
+    batch.finished = Date.now();
+    if (checkBatch === batch) checkBatch = null;
+    broadcastAiStatus();
+    try { syncFilesToDb(); } catch (e) { /* file fallback still works */ }
+    // Even a batch where nothing started reloads: the header button that
+    // started it stays disabled until the page comes back.
     scheduleReload();
   });
   return true;
@@ -1142,7 +1439,13 @@ function runCheck(taskId, replan, generate, command, taskIds) {
    and repaints one list. */
 
 function runAsk(mode, dir) {
-  if (activeRuns.size >= MAX_CONCURRENT_AI) return false;
+  return !!startAsk(mode, dir);
+}
+
+// Returns the run, or null when the pool is full. onExit(code) fires once the
+// run is over, however it ended.
+function startAsk(mode, dir, onExit) {
+  if (activeRuns.size >= MAX_CONCURRENT_AI) return null;
   const id = crypto.randomUUID().slice(0, 8);
   const args = [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
@@ -1158,16 +1461,20 @@ function runAsk(mode, dir) {
   };
   activeRuns.set(id, run);
   broadcastAiStatus();
-  const finish = () => {
+  let over = false;
+  const finish = (code) => {
+    if (over) return;
+    over = true;
     activeRuns.delete(id);
     broadcastAiStatus();
     if (win && !win.isDestroyed()) {
       try { win.webContents.send(mode === 'ideas' ? 'ideas:updated' : 'ask:updated'); } catch (e) {}
     }
+    if (onExit) { try { onExit(code); } catch (e) { /* the caller's problem */ } }
   };
-  ps.on('error', (err) => { reportSpawnFailure(run, err); finish(); });
-  ps.on('exit', (code) => { recordRun(run, code); finish(); });
-  return true;
+  ps.on('error', (err) => { reportSpawnFailure(run, err); finish(-1); });
+  ps.on('exit', (code) => { recordRun(run, code); finish(code); });
+  return run;
 }
 
 /* Execute: the one run with Bash and Edit inside a real repository. The
@@ -1233,21 +1540,28 @@ ipcMain.handle('ask:load', () => readAskLog());
 // The question is written to the thread here, not passed as an argument:
 // PS 5.1 mangles quotes inside an argument, and the script reads the last
 // user message out of ask-log.json anyway.
-ipcMain.handle('ask:send', (ev, text, dir) => {
+// Under the board lock: ask.ps1 merges the answer into the same file.
+ipcMain.handle('ask:send', async (ev, text, dir) => {
   const q = String(text || '').trim().slice(0, 1000);
   if (!q) return { messages: readAskLog(), started: false };
-  const messages = readAskLog();
-  messages.push({
-    id: 'q' + crypto.randomUUID().slice(0, 8),
-    by: 'user', at: new Date().toISOString(),
-    text: q, dir: String(dir || '')
+  const r = await lockedBoardWrite('your question', () => {
+    const messages = readAskLog();
+    messages.push({
+      id: 'q' + crypto.randomUUID().slice(0, 8),
+      by: 'user', at: new Date().toISOString(),
+      text: q, dir: String(dir || '')
+    });
+    writeAskLog(messages);
   });
-  writeAskLog(messages);
+  if (r === LOCK_BUSY) return { messages: readAskLog(), started: false };
   const started = runAsk('ask', dir ? String(dir) : '');
   return { messages: readAskLog(), started };
 });
 
-ipcMain.handle('ask:clear', () => { writeAskLog([]); return true; });
+ipcMain.handle('ask:clear', async () => {
+  const r = await lockedBoardWrite('clearing the thread', () => { writeAskLog([]); });
+  return r !== LOCK_BUSY;
+});
 
 function readIdeas() {
   const data = readJson(IDEAS_FILE);
@@ -1263,10 +1577,6 @@ function readIdeas() {
 function pendingIdeas(entry) {
   const ideas = entry && Array.isArray(entry.ideas) ? entry.ideas : [];
   return ideas.filter((i) => i && i.state === 'new');
-}
-
-function writeIdeas(store) {
-  try { fs.writeFileSync(IDEAS_FILE, JSON.stringify(store, null, 2), 'utf8'); } catch (e) {}
 }
 
 ipcMain.handle('ideas:load', () => {
@@ -1286,12 +1596,24 @@ ipcMain.handle('ideas:generate', (ev, dir) => (dir ? runAsk('ideas', String(dir)
    and the idea leaves the card: a decided suggestion is not a suggestion.
    Decline -> same, into the declined list. Either way the card drops below
    three, so a refill run starts right here and the card fills itself back up. */
-ipcMain.handle('ideas:decide', (ev, dir, ideaId, state, taskId) => {
-  const store = readIdeas();
+ipcMain.handle('ideas:decide', async (ev, dir, ideaId, state, taskId) => {
   const d = String(dir || '').toLowerCase();
   const id = String(ideaId || '');
   const accepted = state === 'accepted';
   const at = new Date().toISOString();
+  let store = null;
+  const r = await lockedBoardWrite('the idea decision', () => {
+    store = decideIdea(readIdeas(), d, id, accepted, taskId, at);
+    fs.writeFileSync(IDEAS_FILE, JSON.stringify(store, null, 2), 'utf8');
+  });
+  // Not saved: hand back the file as it is, so the card shows the truth.
+  if (r === LOCK_BUSY) return Object.assign({ refilling: false }, readIdeas());
+  const entry = store.entries.find((e) => String((e && e.dir) || '').toLowerCase() === d);
+  const refilling = pendingIdeas(entry).length < 3 ? runAsk('ideas', String(dir || '')) : false;
+  return Object.assign({ refilling }, store);
+});
+
+function decideIdea(store, d, id, accepted, taskId, at) {
   store.entries.forEach((e) => {
     if (String((e && e.dir) || '').toLowerCase() !== d) return;
     const ideas = Array.isArray(e.ideas) ? e.ideas : [];
@@ -1305,11 +1627,8 @@ ipcMain.handle('ideas:decide', (ev, dir, ideaId, state, taskId) => {
   });
   store.declined = store.declined.slice(-300);
   store.accepted = store.accepted.slice(-300);
-  writeIdeas(store);
-  const entry = store.entries.find((e) => String((e && e.dir) || '').toLowerCase() === d);
-  const refilling = pendingIdeas(entry).length < 3 ? runAsk('ideas', String(dir || '')) : false;
-  return Object.assign({ refilling }, store);
-});
+  return store;
+}
 
 /* Analytics: raw file-change events collected by core\monitor.ps1 (no AI)
    plus daily project scores from the activity snapshots. Aggregation happens
@@ -1396,7 +1715,7 @@ function createWindow() {
 }
 
 function runPipeline(force) {
-  if (pipelineRunning || activeRuns.size > 0) return;
+  if (pipelineRunning || activeRuns.size > 0 || checkBatch) return;
   pipelineRunning = true;
   const mode = force ? 'replan' : 'full';
   const id = 'pipeline';
@@ -1507,8 +1826,9 @@ function maybeDailyGenerate() {
    this catches the ones whose refill run never got a slot), or when every
    suggestion has been decided and the project has actually moved since the
    card was filled (new commit, different dirty count, more changed files).
-   Capped at 3 projects a day, spread out so they don't take the whole
-   concurrency pool. */
+   Capped at 3 projects a day, run side by side through ideasLimiter: each run
+   rewrites only its own project's entry in ideas.json, and ask.ps1 does that
+   read-modify-write under the board mutex (core\lock.ps1). */
 function maybeRefreshIdeas() {
   const settings = Object.assign({}, DEFAULT_SETTINGS, kvGet('settings') || {});
   if (!settings.autoIdeas) return;
@@ -1526,7 +1846,46 @@ function maybeRefreshIdeas() {
   }).slice(0, 3);
   if (!stale.length) return;
   kvSet('lastIdeas', { date: today });
-  stale.forEach((e, i) => setTimeout(() => runAsk('ideas', e.dir), i * 90 * 1000));
+  stale.forEach((e) => {
+    ideasLimiter.run(() => startWhenFree((onExit) => startAsk('ideas', e.dir, onExit)));
+  });
+}
+
+/* Board compaction (no AI): core\compact-kanban.ps1 trims what only grows
+   in kanban.json, so every digest built from it stays small. Once a day, and
+   before anything AI touches the board that day. A missing script (older
+   install) or a failure is ignored - the board just stays as big as it was,
+   and the next launch tries again. Resolves when the script is done, or after
+   COMPACT_WAIT_MS, whichever comes first. */
+const COMPACT_WAIT_MS = 60 * 1000;
+
+function maybeCompact() {
+  return new Promise((resolve) => {
+    const today = new Date().toISOString().slice(0, 10);
+    if ((kvGet('lastCompact') || {}).date === today) return resolve(false);
+    if (!fs.existsSync(COMPACT_SCRIPT)) return resolve(false);
+    let over = false;
+    const finish = (ok) => {
+      if (over) return;
+      over = true;
+      if (ok) {
+        kvSet('lastCompact', { date: today });
+        try { syncFilesToDb(); } catch (e) { /* files still serve as fallback */ }
+      }
+      resolve(ok);
+    };
+    let ps;
+    try {
+      ps = spawn('powershell.exe', [
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+        '-File', COMPACT_SCRIPT
+      ], PS_OPTS);
+    } catch (e) { return finish(false); }
+    ps.on('error', () => finish(false));
+    ps.on('exit', (code) => finish(code === 0));
+    // A stuck compaction must not hold the morning brief hostage.
+    setTimeout(() => finish(false), COMPACT_WAIT_MS);
+  });
 }
 
 app.whenReady().then(() => {
@@ -1534,13 +1893,18 @@ app.whenReady().then(() => {
   // to files until it's ready, so startup never waits on the database.
   createWindow();
   initDb();
-  runPipeline();
+  // Compact first: the pipeline and every check after it read a smaller board.
+  maybeCompact().then(() => runPipeline());
   // Prune once at startup and once a day after: run files pile up fastest on
-  // a long-running instance, and deleting them costs nothing.
+  // a long-running instance, and deleting them costs nothing. A long-running
+  // instance compacts on the same daily beat, but only while nothing runs.
   pruneRunFiles();
-  setInterval(pruneRunFiles, 24 * 60 * 60 * 1000);
-  // Auto status check for kanban tasks every 5 hours.
-  setInterval(() => runCheck('', false, false, false), 5 * 60 * 60 * 1000);
+  setInterval(() => {
+    pruneRunFiles();
+    if (!pipelineRunning && !checkBatch && activeRuns.size === 0) maybeCompact();
+  }, 24 * 60 * 60 * 1000);
+  // Auto status check for kanban tasks every 5 hours, one run per project.
+  setInterval(runCheckBatch, 5 * 60 * 60 * 1000);
   // Background activity monitor (no AI): on startup and every 30 minutes.
   runMonitor();
   setInterval(runMonitor, 30 * 60 * 1000);

@@ -14,6 +14,13 @@ contextBridge.exposeInMainWorld('dailybrief', {
   plansSave: (items) => ipcRenderer.invoke('plans:save', items),
   kanbanLoad: () => ipcRenderer.invoke('kanban:load'),
   kanbanSave: (data) => ipcRenderer.invoke('kanban:save', data),
+  // After a save: { rev, board } - board is the merged board when AI runs had
+  // changed it meanwhile, null when the page's copy already matches the disk.
+  // Long-term archive (kanban-archive.json, filled by the daily compaction).
+  kanbanArchiveLoad: () => ipcRenderer.invoke('kanban:archiveLoad'),
+  kanbanArchiveRestore: (id) => ipcRenderer.invoke('kanban:archiveRestore', id),
+  kanbanArchiveDelete: (id) => ipcRenderer.invoke('kanban:archiveDelete', id),
+  onKanbanUpdated:(cb) => ipcRenderer.on('kanban:updated', (ev, p) => cb(p)),
   kanbanCheck: () => ipcRenderer.invoke('kanban:check'),
   kanbanCheckTasks: (ids) => ipcRenderer.invoke('kanban:checkTasks', ids),
   aiStatus: () => ipcRenderer.invoke('ai:status'),
@@ -27,6 +34,8 @@ contextBridge.exposeInMainWorld('dailybrief', {
     try { return webUtils.getPathForFile(file); } catch (e) { return null; }
   },
   aiRuns: () => ipcRenderer.invoke('ai:runs'),
+  // Per mode: average tokens / seconds / cost of the last 10 runs that reached the model.
+  aiAverages: () => ipcRenderer.invoke('ai:averages'),
   aiKill: (runId) => ipcRenderer.invoke('ai:kill', runId),
   // Failed / incomplete / late AI runs: the journal, the live event, and the
   // one text file to send on when something needs fixing.

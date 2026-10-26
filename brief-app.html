@@ -265,6 +265,15 @@
     padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.82rem;
   }
   .ai-run-row:last-child { border-bottom: none; }
+  .ai-avg-row {
+    display: grid; grid-template-columns: 9rem 1fr auto auto auto;
+    gap: 0.8rem; align-items: baseline;
+    padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.82rem;
+  }
+  .ai-avg-row:last-child { border-bottom: none; }
+  .ai-avg-row .c { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ai-avg-row .n { color: var(--muted); font-size: 0.72rem; }
+  .ai-run-scope { color: var(--muted); font-size: 0.74rem; }
   .ai-run-row .c { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .ai-run-status-ok { color: var(--ok); font-size: 0.72rem; font-weight: 700; }
   .ai-run-status-killed { color: var(--crit); font-size: 0.72rem; font-weight: 700; }
@@ -834,6 +843,10 @@
       </section>
       <div class="an-tiles" id="ai-tiles"></div>
       <section class="an-section">
+        <h2>Average of the last 10 runs per mode</h2>
+        <div id="ai-averages"></div>
+      </section>
+      <section class="an-section">
         <h2>Problems and delays</h2>
         <div id="ai-problems"></div>
         <div style="margin-top:0.7rem;">
@@ -1113,7 +1126,68 @@ const BRIEF = {
   var archiveListEl = document.getElementById("archive-list");
   var archiveCountEl = document.getElementById("archive-count");
 
-  function saveKb() { kanbanStore.save(kb); }
+  /* Saves go out one at a time, the newest board each time. Each carries the
+     revision the page last got from main, so main can merge it with whatever
+     AI runs wrote meanwhile. A refused save (the board lock stayed taken)
+     keeps the edit on screen and is retried once before the user is told. */
+  var kbRev = null, kbSaving = false, kbDirty = false;
+
+  function sendKb() {
+    return Promise.resolve(kanbanStore.save(Object.assign({}, kb, { rev: kbRev })))
+      .then(function (ok) { return ok !== false; }, function () { return false; });
+  }
+
+  async function flushKb() {
+    kbSaving = true;
+    while (kbDirty) {
+      kbDirty = false;
+      var ok = await sendKb();
+      if (!ok) {
+        await new Promise(function (r) { setTimeout(r, 2000); });
+        kbDirty = false;
+        ok = await sendKb();
+      }
+      if (!ok) {
+        showAiToast({
+          at: nowISO(), mode: "board", status: "failed", level: "error",
+          message: "The board is busy (an AI run is saving it) - your last change is still on screen but was not saved. Make any edit to try again."
+        });
+        break;
+      }
+    }
+    kbSaving = false;
+  }
+
+  function saveKb() {
+    kbDirty = true;
+    if (!kbSaving) flushKb();
+  }
+
+  // Merge a board from main into the live one in place: open modals hold
+  // references to task objects, and those must keep pointing at the board.
+  function applyServerBoard(data) {
+    ["tasks", "archive"].forEach(function (key) {
+      var old = {};
+      (kb[key] || []).forEach(function (t) { old[t.id] = t; });
+      kb[key] = (data[key] || []).map(function (t) {
+        var cur = old[t.id];
+        if (!cur) return t;
+        Object.keys(cur).forEach(function (k) { if (!(k in t)) delete cur[k]; });
+        Object.assign(cur, t);
+        return cur;
+      });
+    });
+  }
+
+  if (api && api.onKanbanUpdated) {
+    api.onKanbanUpdated(function (p) {
+      // An edit made after that save went out wins: the next save merges it
+      // against the older revision, which is still correct.
+      if (!p || kbDirty) return;
+      kbRev = p.rev;
+      if (p.board) { applyServerBoard(p.board); renderKanban(); }
+    });
+  }
   function nowISO() { return new Date().toISOString(); }
   function shortAt(iso) { return String(iso || "").slice(5, 16).replace("T", " "); }
 
@@ -1760,23 +1834,52 @@ const BRIEF = {
     if (focusDesc) { desc.focus(); }
   }
 
-  /* Archive page: browse deleted tasks, expand for details, restore. */
+  /* Archive page: browse deleted tasks, expand for details, restore. Two
+     sources: the board's own archive, and kanban-archive.json, where the
+     daily compaction moves tasks finished or deleted more than 30 days ago.
+     Those are marked "older"; restore and delete go through main, which
+     edits that file under the board lock. */
 
-  function renderArchivePage() {
+  var kbOld = { tasks: [], archive: [] };
+
+  function oldEntries() {
+    var onBoard = {};
+    kb.tasks.concat(kb.archive).forEach(function (t) { onBoard[t.id] = true; });
+    var out = [];
+    (kbOld.tasks || []).forEach(function (t) { if (t && !onBoard[t.id]) out.push({ t: t, kind: "finished" }); });
+    (kbOld.archive || []).forEach(function (t) { if (t && !onBoard[t.id]) out.push({ t: t, kind: "deleted" }); });
+    out.sort(function (a, b) {
+      var ka = a.t.archivedAt || a.t.updatedAt || "", kb2 = b.t.archivedAt || b.t.updatedAt || "";
+      return String(kb2).localeCompare(String(ka));
+    });
+    return out;
+  }
+
+  function renderArchivePage(fresh) {
+    if (!fresh && api && api.kanbanArchiveLoad) {
+      api.kanbanArchiveLoad().then(function (d) {
+        kbOld = d && typeof d === "object" ? d : { tasks: [], archive: [] };
+        if (views.archive && !views.archive.hidden) renderArchivePage(true);
+      }).catch(function () {});
+    }
     archiveListEl.innerHTML = "";
-    archiveCountEl.textContent = kb.archive.length
-      ? kb.archive.length + " deleted tasks - click one for details"
+    var entries = kb.archive.slice().reverse().map(function (t) { return { t: t, kind: "deleted", recent: true }; })
+      .concat(oldEntries());
+    archiveCountEl.textContent = entries.length
+      ? entries.length + " archived tasks - click one for details"
       : "";
-    if (!kb.archive.length) {
+    if (!entries.length) {
       archiveListEl.appendChild(el("div", "arch-empty", "The archive is empty - deleted tasks land here."));
       return;
     }
-    kb.archive.slice().reverse().forEach(function (t) {
+    entries.forEach(function (entry) {
+      var t = entry.t;
       var meta = statusMetaKb(t.status);
+      var when = entry.kind === "finished" ? (t.updatedAt || t.createdAt) : t.archivedAt;
       var card = el("div", "arch-card",
         '<div class="arch-top">' +
           '<span class="arch-title">' + md(t.title) + '</span>' +
-          '<span class="arch-meta">deleted ' + md(shortAt(t.archivedAt)) + '</span>' +
+          '<span class="arch-meta">' + entry.kind + ' ' + md(shortAt(when)) + (entry.recent ? '' : ' · older') + '</span>' +
         '</div>' +
         (t.desc ? '<div class="arch-desc">' + md(t.desc) + '</div>' : '') +
         '<div class="kb-badges">' +
@@ -1811,8 +1914,19 @@ const BRIEF = {
         }
         var actions = el("div", "arch-actions");
         var restoreBtn = el("button", "kb-btn", icon("restore") + "Restore to the board");
-        restoreBtn.addEventListener("click", function (ev) {
+        restoreBtn.addEventListener("click", async function (ev) {
           ev.stopPropagation();
+          if (!entry.recent) {
+            restoreBtn.disabled = true;
+            var ok = api && api.kanbanArchiveRestore ? await api.kanbanArchiveRestore(t.id) : false;
+            if (!ok) { restoreBtn.disabled = false; return; }
+            // Main wrote the board itself: take it, with its revision.
+            var data = await api.kanbanLoad();
+            if (data && Array.isArray(data.tasks)) { applyServerBoard(data); kbRev = data.rev; }
+            renderKanban();
+            renderArchivePage();
+            return;
+          }
           kb.archive = kb.archive.filter(function (x) { return x.id !== t.id; });
           delete t.archivedAt;
           t.done = false;
@@ -1827,6 +1941,12 @@ const BRIEF = {
         permBtn.addEventListener("click", function (ev) {
           ev.stopPropagation();
           if (!confirm("Delete this from the archive for good? It cannot be brought back.")) return;
+          if (!entry.recent) {
+            if (api && api.kanbanArchiveDelete) {
+              api.kanbanArchiveDelete(t.id).then(function () { renderArchivePage(); });
+            }
+            return;
+          }
           kb.archive = kb.archive.filter(function (x) { return x.id !== t.id; });
           saveKb();
           renderArchivePage();
@@ -1900,6 +2020,7 @@ const BRIEF = {
 
   kanbanStore.load().then(function (data) {
     kb = data && Array.isArray(data.tasks) ? { tasks: data.tasks, archive: data.archive || [] } : { tasks: [], archive: [] };
+    kbRev = data && data.rev != null ? data.rev : null;
     renderKanban();
   });
 
@@ -2089,7 +2210,7 @@ const BRIEF = {
         runs.forEach(function (r) {
           var s = Math.floor((Date.now() - r.startedAt) / 1000);
           var estLine = r.est ? estText(r.est, r.startedAt) : "";
-          labels[r.id].textContent = modeLabel(r.mode) + (r.taskId ? " (" + r.taskId + ")" : "") + " · " +
+          labels[r.id].textContent = runLabel(r) + (r.taskId ? " (" + r.taskId + ")" : "") + " · " +
             Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") + (estLine ? " · " + estLine : "");
         });
       }
@@ -2121,6 +2242,7 @@ const BRIEF = {
     });
 
     renderAiProblems();
+    renderAiAverages();
 
     var runsEl = document.getElementById("ai-runs");
     runsEl.innerHTML = "";
@@ -2144,14 +2266,45 @@ const BRIEF = {
       var statusLabel = RUN_STATUS[r.status] || "OK";
       var row = el("div", "ai-run-row",
         '<span class="c">' + md(when) + '</span>' +
-        '<span>' + md(modeLabel(r.mode)) + '</span>' +
-        '<span class="c">' + md(dur) + '</span>' +
+        '<span>' + md(modeLabel(r.mode)) +
+          (r.scope ? ' <span class="ai-run-scope">· ' + md(r.scope) + '</span>' : '') + '</span>' +
+        '<span class="c" title="duration">' + md(dur) + '</span>' +
         '<span class="c" title="input / output tokens">' + md(tok) + ' · ' + md(cost) + '</span>' +
         '<span class="ai-run-status-' + statusCls + '"></span>');
       var st = row.querySelector("span:last-child");
       st.textContent = statusLabel;
       if (r.message) st.title = r.message;
       runsEl.appendChild(row);
+    });
+  }
+
+  /* The running label of one run: a shard of a per-project board check names
+     its project and where it sits in the batch ("Check · alpha (2/5)"). */
+  function runLabel(r) {
+    return modeLabel(r.mode) + (r.scope ? " · " + r.scope : "") +
+      (r.batch ? " (" + r.batch.index + "/" + r.batch.total + ")" : "");
+  }
+
+  /* Per-mode averages over the last 10 runs that reached the model: the
+     number to watch when the pipeline gets leaner or faster. */
+  async function renderAiAverages() {
+    var box = document.getElementById("ai-averages");
+    if (!box) return;
+    var avgs = [];
+    try { avgs = api && api.aiAverages ? await api.aiAverages() : []; } catch (e) {}
+    box.innerHTML = "";
+    if (!Array.isArray(avgs) || !avgs.length) {
+      box.appendChild(el("div", "an-empty", "No completed runs yet - averages appear after the first one."));
+      return;
+    }
+    avgs.forEach(function (a) {
+      box.appendChild(el("div", "ai-avg-row",
+        '<span>' + md(modeLabel(a.mode)) + '</span>' +
+        '<span class="n">' + a.count + (a.count === 1 ? " run" : " runs") + '</span>' +
+        '<span class="c" title="average input / output tokens">' +
+          md(fmtTok(a.inputTokens)) + " in / " + md(fmtTok(a.outputTokens)) + " out" + '</span>' +
+        '<span class="c" title="average duration">' + md(fmtDur(a.durationSec)) + '</span>' +
+        '<span class="c" title="average cost">$' + (a.costUsd || 0).toFixed(3) + '</span>'));
     });
   }
 
@@ -2971,7 +3124,9 @@ const BRIEF = {
     "task-command": "The AI is acting on your comment…",
     ask: "The AI is answering your question…",
     ideas: "The AI is looking for new features for the project…",
-    execute: "The AI is carrying the task out in the project - see VS Code…"
+    execute: "The AI is carrying the task out in the project - see VS Code…",
+    // Not a run: a save refused because the board lock stayed taken.
+    board: "Saving the board…"
   };
   // One column, bottom-right: problem toasts on top, the live activity popup at
   // the bottom, so nothing ever lands over the board.
@@ -3136,7 +3291,8 @@ const BRIEF = {
     var mm = Math.floor(elapsed / 60), ss = Math.floor(elapsed % 60);
     return el("div", "ai-popup-row-wrap",
       '<div class="ai-popup-row">' +
-        '<span class="ai-popup-label">' + md(AI_LABELS[r.mode] || "The AI is working…") + '</span>' +
+        '<span class="ai-popup-label">' + md(AI_LABELS[r.mode] || "The AI is working…") +
+          (r.scope ? " · " + md(r.scope) : "") + (r.batch ? " (" + r.batch.index + "/" + r.batch.total + ")" : "") + '</span>' +
         '<span class="ai-popup-time">' + mm + ":" + (ss < 10 ? "0" : "") + ss + '</span>' +
       '</div>' +
       '<div class="ai-bar"><div class="ai-bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>' +
