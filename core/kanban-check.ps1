@@ -1,11 +1,19 @@
 # Fast kanban check with minimal AI tokens. The script does the heavy lifting:
 # it compresses task + linked-folder activity into check-digest-<runid>.json,
-# Claude reads ONLY that and writes a tiny check-patch-<runid>.json, and the
-# script applies the patch to kanban.json. -TaskId scopes to one task,
-# -TaskIds (comma-separated) to a hand-picked set - one board column's cards
-# for one project;
+# hands that digest to Claude INLINE in a single lean, tool-less call
+# (claude-run.ps1) whose answer is schema-validated structured output, writes
+# that answer to check-patch-<runid>.json and applies it to kanban.json.
+# The model never opens or writes a file: every Read/Write turn used to resend
+# the whole CLI context (~96k input tokens for a 14KB digest).
+# -TaskId scopes to one task, -TaskIds (comma-separated) to a hand-picked set -
+# e.g. one project's cards, which is how the 5-hourly check is sharded: one
+# run per project, in parallel. A scoped run sees only its own tasks and their
+# project and may never create tasks (it has not seen the rest of the board).
 # -Replan re-plans it; -Generate proposes brand-new tasks from overall
-# trajectory instead of per-task activity. -RunId lets several of these run
+# trajectory instead of per-task activity. -NewTasksOnly is the board-wide
+# companion of the sharded check: no per-task evidence, only "is there a busy
+# working folder no task covers yet" - and when there is none it never calls
+# the model at all. -RunId lets several of these run
 # at once (main.js assigns one per concurrent AI process) without their
 # digest/patch/log files colliding.
 # ASCII-only on purpose (PS 5.1 encoding).
@@ -15,6 +23,7 @@ param(
     [switch]$Replan,
     [switch]$Generate,
     [switch]$Command,
+    [switch]$NewTasksOnly,
     [string]$RunId = ''
 )
 
@@ -30,6 +39,7 @@ $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $idSet = @()
 if ($TaskIds) { $idSet = @($TaskIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+$scoped = $false   # set by the check branch; Generate/Command are never "scoped checks"
 
 # Which tasks this run actually saw activity for. A routine check may close
 # only these: closing a task off a trend ("the folder keeps shrinking") is the
@@ -138,6 +148,17 @@ try {
 } catch {
     [IO.File]::WriteAllText($log, ('[fatal] ' + $_.Exception.Message), $utf8NoBom)
     exit 3
+}
+. (Join-Path $PSScriptRoot 'claude-run.ps1')   # Invoke-ClaudeLean
+. (Join-Path $PSScriptRoot 'lock.ps1')         # Invoke-WithBoardLock
+
+# Every read-modify-write of kanban.json runs inside Invoke-WithBoardLock
+# (the board.lock file main.js shares) and re-reads the board inside it. Lock
+# bodies stay read-apply-write only - never a model call: the lock goes stale
+# after 120s. A body runs in a child scope, so anything needed afterwards is
+# set with $script: or lives on a reference object.
+function Read-Kanban {
+    return (([string](Get-Content $kanbanPath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json)
 }
 
 # ---------- Build the compressed digest (script-side, zero AI tokens) ----------
@@ -264,37 +285,48 @@ function Guess-Dir([string]$text) {
     return ''
 }
 
-function Save-Kanban($data) {
-    $mx = New-Object System.Threading.Mutex($false, 'DailyBriefKanbanWrite')
-    $got = $false
-    try {
-        $got = $mx.WaitOne(30000)
-        [IO.File]::WriteAllText($kanbanPath, ($data | ConvertTo-Json -Depth 10), $utf8NoBom)
-    } finally {
-        if ($got) { $mx.ReleaseMutex() }
-        $mx.Dispose()
-    }
-}
-
-$bound = $false
+# Guesses are made on the copy read above (cheap, no lock held); the write
+# re-reads kanban.json inside the lock and binds only tasks that are still
+# unbound there. Writing back the copy read at startup used to clobber any
+# patch another run had applied in between - and with per-project checks
+# running in parallel, every shard does this step at the same moment.
+$guesses = @{}
 foreach ($t in @($kanban.tasks | Where-Object { -not $_.done })) {
     if ($t.PSObject.Properties['dirs'] -and @($t.dirs).Count -gt 0) { continue }
     $guess = Guess-Dir (([string]$t.title) + ' ' + ([string]$t.desc))
     if (-not $guess -or -not (Test-Path $guess)) { continue }
-    if ($t.PSObject.Properties['dirs']) { $t.dirs = @($guess) }
-    else { $t | Add-Member -NotePropertyName dirs -NotePropertyValue @($guess) }
-    $note = New-Object PSObject -Property @{ text = ($STR.autoBound + ' ' + $guess); at = $now }
-    $notes = @()
-    if ($t.PSObject.Properties['aiNotes'] -and $t.aiNotes) { $notes = @($t.aiNotes) }
-    $notes += $note
-    if ($t.PSObject.Properties['aiNotes']) { $t.aiNotes = @($notes | Select-Object -Last 10) }
-    else { $t | Add-Member -NotePropertyName aiNotes -NotePropertyValue @($notes) }
-    # Baseline it immediately, otherwise the first check after binding reports
-    # the whole repo as new work.
-    $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$t.id) -Dir $guess 2>$null
-    $bound = $true
+    $guesses[[string]$t.id] = $guess
 }
-if ($bound) { Save-Kanban $kanban }
+if ($guesses.Count -gt 0) {
+    $script:newlyBound = @()
+    Invoke-WithBoardLock {
+        $fresh = Read-Kanban
+        foreach ($t in @($fresh.tasks | Where-Object { -not $_.done })) {
+            $tid = [string]$t.id
+            if (-not $guesses.ContainsKey($tid)) { continue }
+            if ($t.PSObject.Properties['dirs'] -and @($t.dirs).Count -gt 0) { continue }   # a parallel shard got there first
+            $guess = $guesses[$tid]
+            if ($t.PSObject.Properties['dirs']) { $t.dirs = @($guess) }
+            else { $t | Add-Member -NotePropertyName dirs -NotePropertyValue @($guess) }
+            $note = New-Object PSObject -Property @{ text = ($STR.autoBound + ' ' + $guess); at = $now }
+            $notes = @()
+            if ($t.PSObject.Properties['aiNotes'] -and $t.aiNotes) { $notes = @($t.aiNotes) }
+            $notes += $note
+            if ($t.PSObject.Properties['aiNotes']) { $t.aiNotes = @($notes | Select-Object -Last 10) }
+            else { $t | Add-Member -NotePropertyName aiNotes -NotePropertyValue @($notes) }
+            $script:newlyBound += ,@($tid, $guess)
+        }
+        if ($script:newlyBound.Count -gt 0) {
+            [IO.File]::WriteAllText($kanbanPath, ($fresh | ConvertTo-Json -Depth 10), $utf8NoBom)
+        }
+        $script:kanban = $fresh
+    }
+    # Baseline it immediately, otherwise the first check after binding reports
+    # the whole repo as new work. scans\<id>.json is not the board: no lock.
+    foreach ($nb in $script:newlyBound) {
+        $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$nb[0]) -Dir ([string]$nb[1]) 2>$null
+    }
+}
 
 $archTitles = @()
 if ($kanban.PSObject.Properties['archive'] -and $kanban.archive) {
@@ -304,7 +336,99 @@ if ($kanban.PSObject.Properties['archive'] -and $kanban.archive) {
 # extra title is pure input tokens on every single run.
 $doneTitlesAll = @(@($kanban.tasks | Where-Object { $_.done } | ForEach-Object { [string]$_.title } | Select-Object -Last 8) + @($archTitles | Select-Object -Last 6))
 
-if ($Generate) {
+# Activity source is the background monitor's event log (<=30 min stale, no
+# rescans here): today and yesterday.
+function Get-RecentEvents {
+    $evs = New-Object System.Collections.Generic.List[object]
+    foreach ($d in @((Get-Date), (Get-Date).AddDays(-1))) {
+        $f = Join-Path $base ('analytics\' + $d.ToString('yyyy-MM-dd') + '.jsonl')
+        if (Test-Path $f) {
+            Get-Content $f -Encoding UTF8 | ForEach-Object {
+                if ($_.Trim()) { try { $evs.Add(($_ | ConvertFrom-Json)) } catch {} }
+            }
+        }
+    }
+    return $evs.ToArray()
+}
+
+# Same folder, or one inside the other: a task on a repo covers its subfolders
+# and a task on a subfolder covers the repo it lives in.
+function Same-Tree([string]$a, [string]$b) {
+    if (-not $a -or -not $b) { return $false }
+    $a = $a.TrimEnd([char]92); $b = $b.TrimEnd([char]92); $sep = [char]92
+    return ($a -eq $b -or
+        $a.StartsWith($b + $sep, [StringComparison]::OrdinalIgnoreCase) -or
+        $b.StartsWith($a + $sep, [StringComparison]::OrdinalIgnoreCase))
+}
+
+# Reworded near-duplicates ("Finish Reviews pagination" vs "Reviews pagination
+# finished") slip past an exact-title compare. Word overlap catches them.
+# 0.75, not lower: "board lock in main.js" vs "board lock in lock.ps1" share
+# 4 of 6 words and are two different jobs.
+function Similar-Title([string]$a, [string]$b) {
+    $ta = @(Get-Tokens $a); $tb = @(Get-Tokens $b)
+    if ($ta.Count -eq 0 -or $tb.Count -eq 0) { return $false }
+    $common = @($ta | Where-Object { $tb -contains $_ }).Count
+    $union = @(@($ta) + @($tb) | Select-Object -Unique).Count
+    return ($union -gt 0 -and ($common / $union) -ge 0.75)
+}
+
+if ($NewTasksOnly) {
+    # ---------- New-task digest: busy folders vs what the board already covers ----------
+    # No per-task evidence at all: the per-project shards handled that. This
+    # run only answers "is real work happening somewhere no task covers?"
+    $events = @(Get-RecentEvents)
+    $open = @($kanban.tasks | Where-Object { -not $_.done })
+    $closed = @($kanban.tasks | Where-Object { $_.done })
+    $arch = @()
+    if ($kanban.PSObject.Properties['archive'] -and $kanban.archive) { $arch = @($kanban.archive) }
+    $arch = @($arch + @(Get-ColdArchive))
+    $openDirs = @($open | ForEach-Object { @(AsArr $_.dirs) } | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $closedDirs = @(@($closed) + @($arch) | ForEach-Object { if ($_.PSObject.Properties['dirs']) { @(AsArr $_.dirs) } } | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $closedTitles = @(@($closed) + @($arch) | ForEach-Object { [string]$_.title })
+
+    $top = @($events | Where-Object { -not (Is-Noise ([string]$_.file)) } |
+        Group-Object project | Sort-Object Count -Descending | Select-Object -First 6)
+    $uncovered = @()
+    foreach ($g in $top) {
+        $pd = [string]$g.Name
+        if (-not $pd) { continue }
+        $hit = $false
+        foreach ($od in $openDirs) { if (Same-Tree $pd $od) { $hit = $true; break } }
+        if (-not $hit) { foreach ($cd in $closedDirs) { if (Same-Tree $pd $cd) { $hit = $true; break } } }
+        # A closed task that names the folder covers it too (old tasks may
+        # predate folder binding).
+        $leaf = (Split-Path $pd -Leaf).ToLowerInvariant()
+        if (-not $hit -and $leaf.Length -ge 4) {
+            foreach ($ct in $closedTitles) { if (([string]$ct).ToLowerInvariant().Contains($leaf)) { $hit = $true; break } }
+        }
+        if (-not $hit) {
+            $files = @($g.Group | Sort-Object ts -Descending | ForEach-Object { [string]$_.file } | Select-Object -Unique | Select-Object -First 8)
+            $card = $null
+            $pp = Find-ProjectByDir $pd
+            if ($pp) { $card = Project-Card $pp }
+            $uncovered += ,@{ dir = $pd; changes = $g.Count; files = $files; project = $card }
+        }
+    }
+    # Deterministic short-circuit: every busy folder already has a task (or a
+    # closed one) - nothing a model could add, so none is called.
+    if ($uncovered.Count -eq 0) {
+        $msg = 'skipped: every active folder is covered by a task - zero AI tokens spent' + "`r`n" +
+            ('[timing] check total {0:N0}s' -f $stopwatch.Elapsed.TotalSeconds)
+        [IO.File]::WriteAllText($log, $msg, $utf8NoBom)
+        exit 0
+    }
+    $newDirs = @($uncovered | ForEach-Object { [string]$_.dir })
+    $digest = @{
+        now = $now
+        target = 'NEWTASKS'
+        uncovered = $uncovered
+        topDirs = @($top | ForEach-Object { '{0}x {1}' -f $_.Count, $_.Name })
+        openTasks = @($open | ForEach-Object { @{ title = [string]$_.title; dir = [string]@(AsArr $_.dirs)[0] } })
+        doneTitles = @($closedTitles | Select-Object -Last 20)
+    }
+    [IO.File]::WriteAllText($digestPath, ($digest | ConvertTo-Json -Depth 6), $utf8NoBom)
+} elseif ($Generate) {
     # ---------- Trajectory digest: overall direction, not recent-file activity ----------
     # Content is embedded directly (not left for Claude to Read) so the run
     # stays within the same tiny --max-turns budget as a normal check.
@@ -376,15 +500,7 @@ if ($Generate) {
     # Activity source is the background monitor's event log (<=30 min stale, no
     # rescans here) - the Windows Recent folder is empty on this machine, so the
     # discover-dirs Quick signal is useless for checks.
-    $events = @()
-    foreach ($d in @((Get-Date), (Get-Date).AddDays(-1))) {
-        $f = Join-Path $base ('analytics\' + $d.ToString('yyyy-MM-dd') + '.jsonl')
-        if (Test-Path $f) {
-            Get-Content $f -Encoding UTF8 | ForEach-Object {
-                if ($_.Trim()) { try { $events += ($_ | ConvertFrom-Json) } catch {} }
-            }
-        }
-    }
+    $events = @(Get-RecentEvents)
 
     $activeTasks = @($kanban.tasks | Where-Object { -not $_.done })
     if ($TaskId) {
@@ -410,6 +526,7 @@ if ($Generate) {
         }
     }
 
+    $projCards = @{}
     $digestTasks = @(foreach ($t in $activeTasks) {
         $dirs = @()
         if ($t.PSObject.Properties['dirs'] -and $t.dirs) { $dirs = @($t.dirs) }
@@ -506,10 +623,15 @@ if ($Generate) {
         }
         # What the linked folder actually IS - without it the model can only
         # comment on how many bytes moved.
-        $projCard = $null
+        # One card per project, referenced by name: a project's cards all share
+        # one repo, so a per-project shard used to carry the same card N times.
+        $projName = $null
         if ($dirs.Count -gt 0) {
             $pp = Find-ProjectByDir ([string]$dirs[0])
-            if ($pp) { $projCard = Project-Card $pp -Full:$Replan }
+            if ($pp) {
+                $projName = [string]$pp.name
+                if (-not $projCards.ContainsKey($projName)) { $projCards[$projName] = Project-Card $pp -Full:$Replan }
+            }
         }
 
         $hasFolderSignal = $changeCount -gt 0
@@ -553,7 +675,7 @@ if ($Generate) {
             id = [string]$t.id; title = [string]$t.title; status = [string]$t.status
             desc = $desc; dirs = $dirs; subtasks = $subtasks
             changeCount = $changeCount; changes = $changes; comments = $comments
-            scanDiff = $scanDiff; project = $projCard
+            scanDiff = $scanDiff; project = $projName
             mine = @{ files = $myFiles; commits = $myCommits }
             related = @($nearFiles | Select-Object -First 6)
             sharesFolder = $shared
@@ -569,7 +691,11 @@ if ($Generate) {
     # entirely and spend zero tokens. This applies to a plain check whether
     # it's global or scoped to one task's dead folder - a task-replan is an
     # explicit user request to rethink the plan, so it always runs.
-    $signal = $events.Count -gt 0
+    # A scoped run (one project's shard) asks only about ITS tasks: an event in
+    # some other project is not a reason to spend tokens on this one, or every
+    # shard would run whenever anything at all moved.
+    $scoped = [bool]($TaskId -or $idSet.Count -gt 0)
+    $signal = (-not $scoped) -and $events.Count -gt 0
     $doneNeedsEvidence = $true
     foreach ($dt in $digestTasks) {
         if ($dt.changeCount -gt 0) { $signal = $true }
@@ -592,12 +718,19 @@ if ($Generate) {
         # Only a whole-board check may propose new tasks: a scoped run has not
         # seen the rest of the board and would duplicate what is already there.
         target = if ($TaskId) { $TaskId } elseif ($idSet.Count -gt 0) { 'SCOPED' } else { 'ALL' }
-        topDirs = $topDirs
         tasks = $digestTasks
-        doneTitles = $doneTitlesAll
+        projects = @($projCards.Values)
     }
-    [IO.File]::WriteAllText($digestPath, ($digest | ConvertTo-Json -Depth 6), $utf8NoBom)
+    # topDirs/doneTitles exist only to place and dedupe NEW tasks, which a
+    # scoped run may not create - so a shard carries its own tasks and their
+    # project, nothing from the rest of the board.
+    if (-not $scoped) {
+        $digest.topDirs = $topDirs
+        $digest.doneTitles = $doneTitlesAll
+    }
+    [IO.File]::WriteAllText($digestPath, ($digest | ConvertTo-Json -Depth 8), $utf8NoBom)
 }
+$allowNewTasks = -not ($scoped -and -not ($Replan -and $TaskId))
 
 # ---------- Claude: digest in, tiny patch out ----------
 # A digest is a few KB by design. Anything larger means a serialization bug
@@ -608,175 +741,359 @@ if ($digestSize -gt 1MB) {
     exit 0
 }
 
-$promptFile = if ($Generate) { 'prompt-task-generate.md' }
+$promptFile = if ($NewTasksOnly) { 'prompt-task-newtasks.md' }
+              elseif ($Generate) { 'prompt-task-generate.md' }
               elseif ($Command) { 'prompt-task-command.md' }
               elseif ($Replan -and $TaskId) { 'prompt-task-replan.md' }
               else { 'prompt-check.md' }
-# The exact per-run file names go INTO the prompt. Left to guess a suffixed
-# name, the model spends turns listing the folder and can write the patch
-# where the script never looks for it.
-$prompt = (Get-Content (Join-Path $app $promptFile) -Raw -Encoding UTF8).
-    Replace('{{DATA}}', $base).
+$isTaskReplan = [bool]($Replan -and $TaskId)
+$isRoutineCheck = -not ($Generate -or $Command -or $isTaskReplan -or $NewTasksOnly)
+$valid = @('urgent', 'important', 'planning', 'delayed', 'active')
+
+# The digest goes INTO the prompt, compressed: no Read turn, no file path for
+# the model to get wrong. The pretty file stays on disk for the "show context"
+# view in the app. {{DIGEST}} is replaced last so nothing inside the digest is
+# ever mistaken for a placeholder.
+$digestJson = $digest | ConvertTo-Json -Depth 8 -Compress
+$prompt = ([string](Get-Content (Join-Path $app $promptFile) -Raw -Encoding UTF8)).
     Replace('{{NOW}}', $now).
-    Replace('{{DIGEST}}', $digestPath).
-    Replace('{{PATCH}}', $patchPath)
+    Replace('{{DIGEST}}', $digestJson)
 
-Set-Location $base
-$ErrorActionPreference = 'Continue'
-# Prompt goes via stdin: it contains quotes that PS 5.1 mangles as an argument,
-# which silently breaks every flag after it.
-$claudeArgs = @(
-    '-p',
-    '--model', 'haiku',
-    '--allowedTools', 'Read,Write',
-    '--allow-dangerously-skip-permissions',
-    '--dangerously-skip-permissions',
-    '--max-turns', '8',
-    '--output-format', 'json'
-)
-$prompt | & $claude @claudeArgs 2>&1 | Out-File $log -Encoding utf8
-$ErrorActionPreference = 'Stop'
+# ---------- the answer's shape, enforced by the CLI (--json-schema) ----------
+function S-Str { return @{ type = 'string' } }
+function S-StrArr { return @{ type = 'array'; items = @{ type = 'string' } } }
+function S-Obj($props, [string[]]$req) {
+    return @{ type = 'object'; properties = $props; required = $req; additionalProperties = $false }
+}
+$sStatus = @{ type = 'string'; enum = $valid }
 
-# ---------- Apply the patch (only the script ever rewrites kanban.json) ----------
-# Several checks can finish around the same time, each with its own patch.
-# A named mutex serializes the read-merge-write against kanban.json so no
-# run's update is silently clobbered by another's; the fresh re-read inside
-# the lock picks up whatever the last writer (if any) just saved.
-# Haiku sometimes answers with the patch in a fenced block instead of writing
-# the file, and the whole run then applies nothing.
-if (-not (Test-Path $patchPath)) {
-    if (Recover-JsonFromLog $log $patchPath @('updates', 'newTasks')) {
-        # [info], not [warn]: the patch did land, so this is not a partial run.
-        Add-Content $log '[info] no patch file - patch recovered from the reply'
+if ($NewTasksOnly) {
+    # newTasks only: there is no updates field for the model to fill.
+    $schema = S-Obj @{
+        newTasks = @{ type = 'array'; items = (S-Obj @{
+            id = (S-Str); title = (S-Str); desc = (S-Str); status = $sStatus; dir = (S-Str); subtasks = (S-StrArr)
+        } @('id', 'title', 'desc', 'dir', 'subtasks')) }
+    } @('newTasks')
+} elseif ($Generate) {
+    $schema = S-Obj @{
+        newTasks = @{ type = 'array'; items = (S-Obj @{
+            id = (S-Str); title = (S-Str); desc = (S-Str); status = $sStatus; dir = (S-Str); subtasks = (S-StrArr)
+        } @('id', 'title', 'desc', 'dir', 'subtasks')) }
+    } @('newTasks')
+} elseif ($Command) {
+    $schema = S-Obj @{
+        updates = @{ type = 'array'; items = (S-Obj @{
+            id = (S-Str); title = (S-Str); desc = (S-Str); status = $sStatus; subtasks = (S-StrArr)
+            done = @{ type = 'boolean' }; note = (S-Str); reply = (S-Str)
+        } @('id', 'reply')) }
+        execute = @{ type = 'boolean' }
+        newTasks = @{ type = 'array'; items = (S-Obj @{
+            id = (S-Str); title = (S-Str); desc = (S-Str); status = $sStatus; dir = (S-Str); subtasks = (S-StrArr)
+        } @('id', 'title')) }
+    } @('updates')
+} elseif ($isTaskReplan) {
+    $schema = S-Obj @{
+        updates = @{ type = 'array'; items = (S-Obj @{
+            id = (S-Str); desc = (S-Str); subtasks = (S-StrArr); status = $sStatus; note = (S-Str)
+        } @('id', 'desc', 'subtasks', 'note')) }
+        newTasks = @{ type = 'array'; items = (S-Obj @{
+            id = (S-Str); title = (S-Str); desc = (S-Str); status = $sStatus
+        } @('id', 'title')) }
+    } @('updates')
+} else {
+    $props = @{
+        updates = @{ type = 'array'; items = (S-Obj @{
+            id = (S-Str); note = (S-Str); status = $sStatus; done = @{ type = 'boolean' }
+        } @('id', 'note')) }
     }
+    # A scoped shard gets no newTasks field at all: the schema, not the
+    # prompt, is what keeps it from inventing tasks it cannot dedupe.
+    if ($allowNewTasks) {
+        $props.newTasks = @{ type = 'array'; items = (S-Obj @{
+            id = (S-Str); title = (S-Str); desc = (S-Str); status = $sStatus; dir = (S-Str)
+        } @('id', 'title', 'dir')) }
+    }
+    $schema = S-Obj $props @('updates')
+}
+$schemaJson = $schema | ConvertTo-Json -Depth 12 -Compress
+
+# ---------- script-side validation (what a schema cannot express) ----------
+# Ids the answer may touch: exactly the tasks this run put in front of it.
+$validIds = @()
+if ($Command -or $isTaskReplan) { $validIds = @($TaskId) }
+elseif (-not ($Generate -or $NewTasksOnly)) { $validIds = @($digestTasks | ForEach-Object { [string]$_.id }) }
+$genDirs = @()
+if ($Generate) { $genDirs = @($genProjects | ForEach-Object { [string]$_.dir }) }
+if ($NewTasksOnly) { $genDirs = $newDirs }
+
+# "grew 3 days running" is the note a model writes when it has nothing to say.
+# It is rejected only when it names nothing concrete (file, commit, identifier).
+# CONCRETE_RE is matched case-SENSITIVELY: CamelCase is the signal, and the
+# default -match would read any capitalised word ("Folder") as an identifier.
+$TREND_RE = '(?i)\b(grew|grow(s|ing)?|shr(ink|inks|inking|ank|unk)|score|trend(s|ing)?|in a row|(days?|runs?) running|\d+(st|nd|rd|th) (day|run)|keeps? (growing|shrinking|changing)|(more|less) active|activity (rose|fell|increased|decreased|dropped|grew))\b'
+$CONCRETE_RE = '[A-Za-z0-9_\-]+\.[A-Za-z]{1,6}\b|\b[0-9a-f]{7,40}\b|`[^`]+`|\b[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*\b|\b[a-z0-9]+_[a-z0-9_]+\b|\b(feat|fix|chore|refactor|docs|test|build)(\([^)]*\))?:'
+$MONITOR_RE = '(?i)\b(check on|keep an eye|monitor|observe|work out what|clarify what|analy[sz]e (the )?(folder|activity))\b'
+
+function Test-Patch($p) {
+    $errs = New-Object System.Collections.Generic.List[string]
+    if (-not $p) { $errs.Add('the answer was empty'); return $errs.ToArray() }
+    $ups = @(AsArr $p.updates | Where-Object { $_ -and $_.PSObject.Properties['id'] })
+    $seen = @{}
+    foreach ($u in $ups) {
+        $id = [string]$u.id
+        if (-not $id) { $errs.Add('an update has an empty id'); continue }
+        if ($validIds -notcontains $id) { $errs.Add("update id '$id' is not a task in the digest - use only the ids given"); continue }
+        $seen[$id] = $true
+        if ($u.PSObject.Properties['status'] -and $u.status -and $valid -notcontains [string]$u.status) {
+            $errs.Add("update $id has status '$($u.status)' - allowed: " + ($valid -join ', '))
+        }
+        if ($isRoutineCheck) {
+            $note = ([string]$u.note).Trim()
+            if (-not $note) { $errs.Add("update $id has an empty note - write one or drop the update") }
+            elseif ($note -match $TREND_RE -and $note -cnotmatch $CONCRETE_RE) {
+                $errs.Add("update $id note is a size/score trend, not evidence - name the file or commit, or drop the update")
+            }
+            # The same gate the apply step enforces, surfaced to the model so
+            # the retry can fix the rest of the answer instead of losing it.
+            if ($u.PSObject.Properties['done'] -and $u.done -eq $true -and -not $evidenceIds.ContainsKey($id)) {
+                $errs.Add("update $id sets done but mine.files and mine.commits are empty and the folder is shared - remove done")
+            }
+        }
+        if ($isTaskReplan) {
+            if (@(AsArr $u.subtasks | Where-Object { ([string]$_).Trim() }).Count -lt 2) { $errs.Add("update $id needs 3-8 concrete subtasks") }
+            if ($u.PSObject.Properties['done']) { $errs.Add('a replan never sets done') }
+        }
+        if ($Command -and -not ([string]$u.reply).Trim()) { $errs.Add("update $id has an empty reply - reply is required") }
+    }
+    if (($Command -or $isTaskReplan) -and -not $seen.ContainsKey($TaskId)) {
+        $errs.Add("the answer must contain one update with id '$TaskId'")
+    }
+    $nts = @(AsArr $p.newTasks | Where-Object { $_ -and $_.PSObject.Properties['title'] })
+    foreach ($n in $nts) {
+        $title = ([string]$n.title).Trim()
+        # The digest is inlined as JSON, and the model sometimes copies a path
+        # with its JSON escaping ("C:\\Users"). Undo that here instead of
+        # spending a retry on it; the fixed value is what gets written.
+        if ($n.PSObject.Properties['dir'] -and $n.dir) {
+            $fixed = ([string]$n.dir).Replace('\\', '\')
+            foreach ($gd in $genDirs) { if ($gd -ieq $fixed) { $fixed = $gd } }
+            $n.dir = $fixed
+        }
+        if (-not $title -or -not ([string]$n.id).Trim()) { $errs.Add('a new task has an empty id or title'); continue }
+        if ($title -match $MONITOR_RE) { $errs.Add("new task '$title' is a monitoring/observation task - forbidden") }
+        if (($Generate -or $NewTasksOnly) -and $genDirs -notcontains [string]$n.dir) { $errs.Add("new task '$title' has dir '$($n.dir)' - copy one dir exactly from the digest") }
+    }
+    if ($NewTasksOnly -and @(AsArr $p.updates | Where-Object { $_ }).Count -gt 0) { $errs.Add('this run creates new tasks only - updates are not allowed') }
+    if (($Generate -or $NewTasksOnly) -and $nts.Count -gt 3) { $errs.Add('at most 3 new tasks') }
+    return $errs.ToArray()
 }
 
+# A two-call run would otherwise be billed as its last call only: main.js reads
+# usage from the LAST result line in the log. One summed line keeps the AI
+# usage page honest; it carries the last call's outcome fields unchanged.
+function Write-UsageTotal($envs) {
+    if ($envs.Count -lt 2) { return }
+    $last = $envs[$envs.Count - 1]
+    $sum = [ordered]@{ input_tokens = [int64]0; cache_creation_input_tokens = [int64]0; cache_read_input_tokens = [int64]0; output_tokens = [int64]0 }
+    $cost = 0.0; $turns = 0; $ms = [int64]0
+    foreach ($e in $envs) {
+        if ($e.usage) {
+            foreach ($k in @($sum.Keys)) { if ($e.usage.PSObject.Properties[$k]) { $sum[$k] = $sum[$k] + [int64]$e.usage.$k } }
+        }
+        $cost += [double]$e.total_cost_usd; $turns += [int]$e.num_turns; $ms += [int64]$e.duration_ms
+    }
+    $agg = [ordered]@{
+        type = 'result'; subtype = [string]$last.subtype; is_error = [bool]$last.is_error
+        num_turns = $turns; duration_ms = $ms; total_cost_usd = $cost; usage = $sum
+        result = ('(usage summed over ' + $envs.Count + ' model calls)')
+    }
+    if ($last.PSObject.Properties['errors'] -and $last.errors) { $agg.errors = @($last.errors) }
+    Add-Content -Path $log -Value ($agg | ConvertTo-Json -Depth 4 -Compress) -Encoding UTF8
+}
+
+Set-Location $base
+$system = 'You are the DailyBrief kanban assistant inside a desktop app pipeline. Everything you need is in the message; you have no tools and need none. Answer only with the structured output. Write in English.'
+$envelopes = New-Object System.Collections.Generic.List[object]
+$res = Invoke-ClaudeLean -Prompt $prompt -Log $log -System $system -Model 'haiku' -Schema $schemaJson -MaxTurns 3
+if ($res.envelope) { $envelopes.Add($res.envelope) }
+$errs = @()
+if ($res.ok) { $errs = @(Test-Patch $res.data) } else { $errs = @([string]$res.error) }
+
+# One retry, with the reasons attached. A second miss applies nothing: half of
+# a wrong answer on the board is worse than no answer.
+if ($errs.Count -gt 0) {
+    Add-Content $log ('[info] answer rejected, retrying once: ' + ($errs -join ' | '))
+    $prevAnswer = '(none)'
+    if ($res.data) { $prevAnswer = $res.data | ConvertTo-Json -Depth 10 -Compress }
+    $retryPrompt = $prompt + "`n`n## Your previous answer was rejected`n" +
+        (($errs | ForEach-Object { '- ' + $_ }) -join "`n") +
+        "`n`nPrevious answer:`n" + $prevAnswer +
+        "`n`nAnswer again with every listed problem fixed. An update you cannot fix is left out."
+    $res = Invoke-ClaudeLean -Prompt $retryPrompt -Log $log -System $system -Model 'haiku' -Schema $schemaJson -MaxTurns 3
+    if ($res.envelope) { $envelopes.Add($res.envelope) }
+    if ($res.ok) { $errs = @(Test-Patch $res.data) } else { $errs = @([string]$res.error) }
+}
+Write-UsageTotal $envelopes
+
+# The script writes the patch file from the structured answer - same name and
+# shape as when the model wrote it, so everything below is unchanged.
+if ($errs.Count -gt 0) {
+    Add-Content $log ('[warn] model answer rejected after retry - nothing applied: ' + ($errs -join ' | '))
+} else {
+    [IO.File]::WriteAllText($patchPath, ($res.data | ConvertTo-Json -Depth 10), $utf8NoBom)
+}
+
+# ---------- Apply the patch (only the script ever rewrites kanban.json) ----------
+# Several checks can finish around the same time, each with its own patch
+# (per-project shards finish together by design). The board lock serializes
+# the read-merge-write, and kanban.json is re-read INSIDE it so this run
+# merges onto whatever the previous writer just saved instead of the copy it
+# read at startup.
+$patch = $null
+$touched = New-Object System.Collections.Generic.List[string]
 if (Test-Path $patchPath) {
-    $mutex = New-Object System.Threading.Mutex($false, 'DailyBriefKanbanWrite')
-    $gotLock = $false
     try {
-        $patch = Get-Content $patchPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $valid = @('urgent', 'important', 'planning', 'delayed', 'active')
+        $patch = ([string](Get-Content $patchPath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json
         $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
+        $script:newScans = New-Object System.Collections.Generic.List[object]
 
-        $gotLock = $mutex.WaitOne(30000)
-        if (-not $gotLock) { throw 'kanban.json lock timeout' }
-        $fresh = Get-Content $kanbanPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Invoke-WithBoardLock {
+            $fresh = Read-Kanban
 
-        $touched = New-Object System.Collections.Generic.List[string]
-        foreach ($u in @($patch.updates)) {
-            if (-not $u -or -not $u.id) { continue }
-            $t = $fresh.tasks | Where-Object { $_.id -eq $u.id } | Select-Object -First 1
-            if (-not $t) { continue }
-            $touched.Add([string]$u.id)
-            if ($u.PSObject.Properties['note'] -and $u.note) {
-                $note = New-Object PSObject -Property @{ text = [string]$u.note; at = $now }
-                $notes = @()
-                if ($t.PSObject.Properties['aiNotes'] -and $t.aiNotes) { $notes = @($t.aiNotes) }
-                $notes += $note
-                if ($notes.Count -gt 10) { $notes = @($notes | Select-Object -Last 10) }
-                if ($t.PSObject.Properties['aiNotes']) { $t.aiNotes = $notes }
-                else { $t | Add-Member -NotePropertyName aiNotes -NotePropertyValue $notes }
-            }
-            # A direct order from the user may rewrite the title and override
-            # even an urgent status; a routine check may not.
-            if ($Command -and $u.PSObject.Properties['title'] -and $u.title) { $t.title = ([string]$u.title).Trim() }
-            if ($u.PSObject.Properties['status'] -and $valid -contains $u.status -and ($Command -or $t.status -ne 'urgent')) { $t.status = [string]$u.status }
-            if ($u.PSObject.Properties['desc'] -and $u.desc) { $t.desc = [string]$u.desc }
-            # The model's answer to the user's comment, posted back into the thread.
-            if ($u.PSObject.Properties['reply'] -and $u.reply) {
-                $cs = @()
-                if ($t.PSObject.Properties['comments'] -and $t.comments) { $cs = @($t.comments) }
-                $cs += (New-Object PSObject -Property @{ by = 'ai'; text = [string]$u.reply; at = $stamp; state = 'applied' })
-                if ($t.PSObject.Properties['comments']) { $t.comments = $cs }
-                else { $t | Add-Member -NotePropertyName comments -NotePropertyValue $cs }
-            }
-            if ($u.PSObject.Properties['subtasks'] -and $u.subtasks) {
-                # Keep done-state of subtasks whose text survived the replan.
-                $oldDone = @{}
-                if ($t.PSObject.Properties['subtasks'] -and $t.subtasks) {
-                    foreach ($os in $t.subtasks) { if ($os.done) { $oldDone[[string]$os.text] = $true } }
+            # Runs that only create tasks never edit existing ones.
+            $ups = @($patch.updates)
+            if ($Generate -or $NewTasksOnly) { $ups = @() }
+            foreach ($u in $ups) {
+                if (-not $u -or -not $u.id) { continue }
+                # Belt and braces after validation: never touch a task this run
+                # did not show the model (a shard must stay inside its project).
+                if ($validIds.Count -gt 0 -and $validIds -notcontains [string]$u.id) { continue }
+                $t = $fresh.tasks | Where-Object { $_.id -eq $u.id } | Select-Object -First 1
+                if (-not $t) { continue }
+                $touched.Add([string]$u.id)
+                if ($u.PSObject.Properties['note'] -and $u.note) {
+                    $note = New-Object PSObject -Property @{ text = [string]$u.note; at = $now }
+                    $notes = @()
+                    if ($t.PSObject.Properties['aiNotes'] -and $t.aiNotes) { $notes = @($t.aiNotes) }
+                    $notes += $note
+                    if ($notes.Count -gt 10) { $notes = @($notes | Select-Object -Last 10) }
+                    if ($t.PSObject.Properties['aiNotes']) { $t.aiNotes = $notes }
+                    else { $t | Add-Member -NotePropertyName aiNotes -NotePropertyValue $notes }
                 }
-                $newSubs = @($u.subtasks | Select-Object -First 30 | ForEach-Object {
-                    $txt = [string]$_
-                    New-Object PSObject -Property @{ text = $txt; done = [bool]$oldDone[$txt] }
-                })
-                if ($t.PSObject.Properties['subtasks']) { $t.subtasks = $newSubs }
-                else { $t | Add-Member -NotePropertyName subtasks -NotePropertyValue $newSubs }
+                # A direct order from the user may rewrite the title and override
+                # even an urgent status; a routine check may not.
+                if ($Command -and $u.PSObject.Properties['title'] -and $u.title) { $t.title = ([string]$u.title).Trim() }
+                if ($u.PSObject.Properties['status'] -and $valid -contains $u.status -and ($Command -or $t.status -ne 'urgent')) { $t.status = [string]$u.status }
+                if ($u.PSObject.Properties['desc'] -and $u.desc) { $t.desc = [string]$u.desc }
+                # The model's answer to the user's comment, posted back into the thread.
+                if ($u.PSObject.Properties['reply'] -and $u.reply) {
+                    $cs = @()
+                    if ($t.PSObject.Properties['comments'] -and $t.comments) { $cs = @($t.comments) }
+                    $cs += (New-Object PSObject -Property @{ by = 'ai'; text = [string]$u.reply; at = $stamp; state = 'applied' })
+                    if ($t.PSObject.Properties['comments']) { $t.comments = $cs }
+                    else { $t | Add-Member -NotePropertyName comments -NotePropertyValue $cs }
+                }
+                if ($u.PSObject.Properties['subtasks'] -and $u.subtasks) {
+                    # Keep done-state of subtasks whose text survived the replan.
+                    $oldDone = @{}
+                    if ($t.PSObject.Properties['subtasks'] -and $t.subtasks) {
+                        foreach ($os in $t.subtasks) { if ($os.done) { $oldDone[[string]$os.text] = $true } }
+                    }
+                    $newSubs = @($u.subtasks | Select-Object -First 30 | ForEach-Object {
+                        $txt = [string]$_
+                        New-Object PSObject -Property @{ text = $txt; done = [bool]$oldDone[$txt] }
+                    })
+                    if ($t.PSObject.Properties['subtasks']) { $t.subtasks = $newSubs }
+                    else { $t | Add-Member -NotePropertyName subtasks -NotePropertyValue $newSubs }
+                }
+                # A comment ("this one is finished") is the user's own word and
+                # closes the task outright. A routine check has to point at
+                # something that moved in the task's own folder; a replan never
+                # closes anything.
+                if ($u.PSObject.Properties['done'] -and $u.done -eq $true) {
+                    if ($isTaskReplan) {
+                        Add-Content $log ('[warn] refused done for ' + $u.id + ': a replan never closes a task')
+                    } elseif ($doneNeedsEvidence -and -not $Command -and -not $evidenceIds.ContainsKey([string]$u.id)) {
+                        Add-Content $log ('[warn] refused done for ' + $u.id + ': no commit/file activity for this task in this run')
+                    } else {
+                        $t.done = $true
+                    }
+                }
+                $t.updatedAt = $stamp
             }
-            # A comment ("this one is finished") is the user's own word and
-            # closes the task outright. A routine check has to point at
-            # something that moved in the task's own folder.
-            if ($u.PSObject.Properties['done'] -and $u.done -eq $true) {
-                if ($doneNeedsEvidence -and -not $Command -and -not $evidenceIds.ContainsKey([string]$u.id)) {
-                    Add-Content $log ('[warn] refused done for ' + $u.id + ': no commit/file activity for this task in this run')
-                } else {
-                    $t.done = $true
+
+            # Only a run that saw the whole board may add to it: a per-project
+            # shard cannot dedupe against what it was never shown.
+            $nts = @($patch.newTasks | Where-Object { $_ })
+            if (-not $allowNewTasks -and $nts.Count -gt 0) {
+                Add-Content $log ('[info] scoped run: ' + $nts.Count + ' new task(s) ignored')
+                $nts = @()
+            }
+            if ($Generate -or $NewTasksOnly) { $nts = @($nts | Select-Object -First 3) }
+            # Dedupe against ids (tasks + archive) and normalized titles (tasks +
+            # archive + done) so a reworded near-duplicate can't slip through.
+            $freshArchive = if ($fresh.PSObject.Properties['archive'] -and $fresh.archive) { @($fresh.archive) } else { @() }
+            $freshArchive = @($freshArchive + @(Get-ColdArchive))
+            $existingIds = @(@($fresh.tasks | ForEach-Object { [string]$_.id }) + @($freshArchive | ForEach-Object { [string]$_.id }))
+            $existingTitlesNorm = @(@($fresh.tasks | ForEach-Object { Norm-Title $_.title }) + @($freshArchive | ForEach-Object { Norm-Title $_.title }))
+            foreach ($n in $nts) {
+                if (-not $n -or -not $n.id -or -not $n.title) { continue }
+                $nTitleNorm = Norm-Title $n.title
+                if ($existingIds -contains [string]$n.id -or $existingTitlesNorm -contains $nTitleNorm) { continue }
+                # A split the user ordered in a comment is never "too similar".
+                $similar = $false
+                if (-not $Command) {
+                    foreach ($et in $existingTitlesNorm) { if (Similar-Title $nTitleNorm $et) { $similar = $true; break } }
+                }
+                if ($similar) { Add-Content $log ('[info] new task skipped, too close to an existing title: ' + $n.title); continue }
+                # Bind the folder at birth. A task with dirs=[] never collects any
+                # evidence, so every later check has nothing to say about it.
+                $newDirs = @()
+                if ($n.PSObject.Properties['dir'] -and $n.dir -and (Test-Path ([string]$n.dir))) { $newDirs = @([string]$n.dir) }
+                else {
+                    $g = Guess-Dir (([string]$n.title) + ' ' + ([string]$n.desc) + ' ' + ([string]$n.dir))
+                    if ($g) { $newDirs = @($g) }
+                }
+                $ntSubs = @()
+                if ($n.PSObject.Properties['subtasks'] -and $n.subtasks) {
+                    $ntSubs = @($n.subtasks | Select-Object -First 15 |
+                        ForEach-Object { New-Object PSObject -Property @{ text = [string]$_; done = $false } })
+                }
+                $nt = New-Object PSObject -Property @{
+                    id = [string]$n.id; title = [string]$n.title; desc = [string]$n.desc
+                    status = if ($valid -contains $n.status) { [string]$n.status } else { 'planning' }
+                    done = $false; createdBy = 'ai'
+                    createdAt = $stamp; updatedAt = $stamp
+                    comments = @(); aiNotes = @(); dirs = $newDirs; subtasks = $ntSubs
+                }
+                if ($newDirs.Count -gt 0) { $script:newScans.Add(@([string]$n.id, [string]$newDirs[0])) }
+                $fresh.tasks = @($fresh.tasks) + $nt
+                $existingIds += [string]$n.id
+                $existingTitlesNorm += $nTitleNorm
+            }
+
+            [IO.File]::WriteAllText($kanbanPath, ($fresh | ConvertTo-Json -Depth 10), $utf8NoBom)
+
+            # Folders to re-baseline, read from the board as just written.
+            foreach ($tid in @($touched | Select-Object -Unique)) {
+                $tt = $fresh.tasks | Where-Object { $_.id -eq $tid } | Select-Object -First 1
+                if ($tt -and $tt.PSObject.Properties['dirs'] -and @($tt.dirs).Count -gt 0) {
+                    $script:newScans.Add(@([string]$tid, [string]@($tt.dirs)[0]))
                 }
             }
-            $t.updatedAt = $stamp
         }
-
-        # Dedupe against ids (tasks + archive) and normalized titles (tasks +
-        # archive + done) so a reworded near-duplicate can't slip through.
-        $freshArchive = if ($fresh.PSObject.Properties['archive'] -and $fresh.archive) { @($fresh.archive) } else { @() }
-        $existingIds = @(@($fresh.tasks | ForEach-Object { [string]$_.id }) + @($freshArchive | ForEach-Object { [string]$_.id }))
-        $existingTitlesNorm = @(@($fresh.tasks | ForEach-Object { Norm-Title $_.title }) + @($freshArchive | ForEach-Object { Norm-Title $_.title }))
-        foreach ($n in @($patch.newTasks)) {
-            if (-not $n -or -not $n.id -or -not $n.title) { continue }
-            $nTitleNorm = Norm-Title $n.title
-            if ($existingIds -contains [string]$n.id -or $existingTitlesNorm -contains $nTitleNorm) { continue }
-            # Bind the folder at birth. A task with dirs=[] never collects any
-            # evidence, so every later check has nothing to say about it.
-            $newDirs = @()
-            if ($n.PSObject.Properties['dir'] -and $n.dir -and (Test-Path ([string]$n.dir))) { $newDirs = @([string]$n.dir) }
-            else {
-                $g = Guess-Dir (([string]$n.title) + ' ' + ([string]$n.desc) + ' ' + ([string]$n.dir))
-                if ($g) { $newDirs = @($g) }
-            }
-            $ntSubs = @()
-            if ($n.PSObject.Properties['subtasks'] -and $n.subtasks) {
-                $ntSubs = @($n.subtasks | Select-Object -First 15 |
-                    ForEach-Object { New-Object PSObject -Property @{ text = [string]$_; done = $false } })
-            }
-            $nt = New-Object PSObject -Property @{
-                id = [string]$n.id; title = [string]$n.title; desc = [string]$n.desc
-                status = if ($valid -contains $n.status) { [string]$n.status } else { 'planning' }
-                done = $false; createdBy = 'ai'
-                createdAt = $stamp; updatedAt = $stamp
-                comments = @(); aiNotes = @(); dirs = $newDirs; subtasks = $ntSubs
-            }
-            if ($newDirs.Count -gt 0) {
-                $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$n.id) -Dir ([string]$newDirs[0]) 2>$null
-            }
-            $fresh.tasks = @($fresh.tasks) + $nt
-            $existingIds += [string]$n.id
-            $existingTitlesNorm += $nTitleNorm
-        }
-
-        [IO.File]::WriteAllText($kanbanPath, ($fresh | ConvertTo-Json -Depth 10), $utf8NoBom)
         Remove-Item $patchPath -Force
 
         # Only now does the baseline move, and only for the tasks this run had
-        # something to say about. Re-baselining every task on every check let
-        # the first run eat the evidence and left every later one blind.
-        foreach ($tid in @($touched | Select-Object -Unique)) {
-            $tt = $fresh.tasks | Where-Object { $_.id -eq $tid } | Select-Object -First 1
-            if ($tt -and $tt.PSObject.Properties['dirs'] -and @($tt.dirs).Count -gt 0) {
-                $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$tid) -Dir ([string]@($tt.dirs)[0]) 2>$null
-            }
+        # something to say about (plus newborn tasks). Re-baselining every task
+        # on every check let the first run eat the evidence and left every later
+        # one blind. scans\ is per task, not the board: done outside the lock.
+        foreach ($sc in $script:newScans) {
+            $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$sc[0]) -Dir ([string]$sc[1]) 2>$null
         }
     } catch {
         Add-Content $log ('[warn] patch apply failed: ' + $_.Exception.Message)
-    } finally {
-        if ($gotLock) { $mutex.ReleaseMutex() }
-        $mutex.Dispose()
     }
-} else {
-    # The prompt asks for the patch file unconditionally - even "nothing
-    # changed" is written as {"updates":[]}. No file at all means the model
-    # stopped early (turn limit, refusal, crash) and this run changed nothing.
-    Add-Content $log '[warn] model wrote no output file'
 }
 
 # A comment that orders the work to actually be DONE (not re-planned) comes
@@ -793,26 +1110,22 @@ if ($Command -and $TaskId -and $patch -and $patch.PSObject.Properties['execute']
 # main.js re-fires a command run for every comment still marked "new", so a
 # failed run left un-acked would retrigger itself on every board save.
 if ($Command -and $TaskId) {
-    $mutex2 = New-Object System.Threading.Mutex($false, 'DailyBriefKanbanWrite')
-    $got2 = $false
     try {
-        $got2 = $mutex2.WaitOne(30000)
-        $fresh2 = Get-Content $kanbanPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $t2 = $fresh2.tasks | Where-Object { $_.id -eq $TaskId } | Select-Object -First 1
-        if ($t2 -and $t2.PSObject.Properties['comments'] -and $t2.comments) {
-            $changed = $false
-            foreach ($c in @($t2.comments)) {
-                if ($c.PSObject.Properties['state'] -and $c.state -eq 'new') {
-                    $c.state = 'applied'; $changed = $true
+        Invoke-WithBoardLock {
+            $fresh2 = Read-Kanban
+            $t2 = $fresh2.tasks | Where-Object { $_.id -eq $TaskId } | Select-Object -First 1
+            if ($t2 -and $t2.PSObject.Properties['comments'] -and $t2.comments) {
+                $changed = $false
+                foreach ($c in @($t2.comments)) {
+                    if ($c.PSObject.Properties['state'] -and $c.state -eq 'new') {
+                        $c.state = 'applied'; $changed = $true
+                    }
                 }
+                if ($changed) { [IO.File]::WriteAllText($kanbanPath, ($fresh2 | ConvertTo-Json -Depth 10), $utf8NoBom) }
             }
-            if ($changed) { [IO.File]::WriteAllText($kanbanPath, ($fresh2 | ConvertTo-Json -Depth 10), $utf8NoBom) }
         }
     } catch {
         Add-Content $log ('[warn] comment ack failed: ' + $_.Exception.Message)
-    } finally {
-        if ($got2) { $mutex2.ReleaseMutex() }
-        $mutex2.Dispose()
     }
 }
 

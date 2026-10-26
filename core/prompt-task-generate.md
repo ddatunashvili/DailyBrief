@@ -1,6 +1,6 @@
-You generate tasks from real projects. It is now {{NOW}}. Working folder: {{DATA}}. Goal: minimum tokens. Questions are forbidden. Write in English.
+You generate tasks from real projects. It is now {{NOW}}. Goal: minimum tokens. Questions are forbidden. Write in English.
 
-Read exactly one file: {{DIGEST}}. Open no other file.
+The digest is at the end of this message. It is all you get and all you need.
 
 What the digest holds:
 - `projects` — cards for the real projects. Each has: `name`, `dir` (full path), `stack`, `branch`, `lastCommits` (the latest commit subjects), `dirtyCount`/`dirtySample` (uncommitted files), `changed14d`/`recentFiles` (changes in the last 2 weeks), `todoCount`/`todoSample` (TODO/FIXME left in the code), `readme`/`pkgDesc` (what this project is).
@@ -18,7 +18,7 @@ What counts as a real signal (at least one is required):
 
 A task whose content is observation or monitoring ("check on", "clarify", "keep an eye on", "analyse the folder's activity", "work out what it is for") is **categorically forbidden**. If all you can do for a project is watch it, create no task.
 
-Write {{PATCH}} (strict JSON, newTasks only):
+Answer in exactly this shape (newTasks only):
 {"newTasks":[{"id":"<slug-en>","title":"<a concrete outcome>","desc":"<1-2 sentences: which evidence it follows from>","status":"planning","dir":"<the project's dir from the digest>","subtasks":["<step 1>","<step 2>","<step 3>"]}]}
 
 Rules:
@@ -28,4 +28,7 @@ Rules:
 - `dir` is required and must be copied exactly from the digest.
 - Never repeat anything resembling activeTitles/doneTitles or work already covered for that project; a new task for a folder in `boundDirs` only when it is a plainly independent direction.
 
-Do not touch kanban.json — the script updates it. Write nothing but {{PATCH}}.
+The script adds your tasks to the board.
+
+Digest:
+{{DIGEST}}
