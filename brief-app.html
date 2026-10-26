@@ -1096,30 +1096,19 @@ const BRIEF = {
 
   var kb = { tasks: [], archive: [] };
   var boardEl = document.getElementById("board");
-  /* Wheel over the board pans it sideways, the way a browser does with
-     Shift+wheel. A plain wheel still scrolls a column first and only spills
-     into the horizontal pan once that column has nothing left to give. */
+  /* Ctrl+wheel over the board pans it sideways. A plain wheel only ever
+     scrolls vertically (hijacking it to pan sideways was disorienting), and
+     Shift+wheel keeps the browser's own sideways scroll. preventDefault also
+     stops Chromium's Ctrl+wheel zoom here, so zoom still works everywhere
+     except over the board. */
   if (boardEl) {
     boardEl.addEventListener("wheel", function (e) {
-      if (e.ctrlKey) return;                       // Ctrl+wheel stays zoom
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;  // real trackpad pan
+      if (!e.ctrlKey) return;
+      e.preventDefault();
       var max = boardEl.scrollWidth - boardEl.clientWidth;
       if (max <= 0) return;
-      if (!e.shiftKey) {
-        // Let an inner vertical scroller consume the wheel if it still can.
-        var n = e.target;
-        while (n && n !== boardEl) {
-          if (n.scrollHeight > n.clientHeight + 1) {
-            var room = e.deltaY < 0 ? n.scrollTop : n.scrollHeight - n.clientHeight - n.scrollTop;
-            if (room > 1) return;
-          }
-          n = n.parentNode;
-        }
-      }
-      var next = Math.max(0, Math.min(max, boardEl.scrollLeft + e.deltaY));
-      if (next === boardEl.scrollLeft) return;
-      boardEl.scrollLeft = next;
-      e.preventDefault();
+      var d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      boardEl.scrollLeft = Math.max(0, Math.min(max, boardEl.scrollLeft + d));
     }, { passive: false });
   }
 
@@ -3094,7 +3083,7 @@ const BRIEF = {
     row.appendChild(btn("+", "Zoom in (Ctrl++)", function () { return api.zoomStep(1); }));
     row.appendChild(btn("100%", "Back to normal (Ctrl+0)", function () { return api.zoomSet(1); }));
     box.appendChild(row);
-    box.appendChild(el("div", "hint", "Ctrl with +/− or Ctrl+mouse wheel; Ctrl+0 goes back to normal."));
+    box.appendChild(el("div", "hint", "Ctrl with +/− or Ctrl+mouse wheel (over the board, Ctrl+wheel scrolls sideways instead); Ctrl+0 goes back to normal."));
   }
 
   if (api && api.zoomGet) {
