@@ -63,21 +63,39 @@ function Invoke-ClaudeLean {
         [string]$Schema = '',
         [string]$Tools = '',
         [string[]]$AddDir = @(),
-        [int]$MaxTurns = 3
+        [int]$MaxTurns = 3,
+        # Keeps the account's claude.ai connectors (e.g. Claude Docs): they
+        # arrive through default MCP loading, which --strict-mcp-config with
+        # an empty config switches off. Hooks/plugins stay off either way
+        # (connectors still load with --setting-sources ""). With it, -Tools
+        # names the connector tools to allow; the only built-in is ToolSearch.
+        # Measured: ~7.8k baseline tokens with this account's connectors.
+        [switch]$ClaudeAiConnectors
     )
     $exe = Get-ClaudeExe
     $a = @(
         '-p',
         '--model', $Model,
-        '--setting-sources', '""',
-        '--strict-mcp-config', '--mcp-config', (Get-EmptyMcpConfig),
+        '--setting-sources', '""'
+    )
+    if (-not $ClaudeAiConnectors) {
+        $a += @('--strict-mcp-config', '--mcp-config', (Get-EmptyMcpConfig))
+    }
+    $a += @(
         '--disable-slash-commands',
         '--no-session-persistence',
         '--system-prompt', (ConvertTo-NativeArg $System),
         '--max-turns', [string]$MaxTurns,
         '--output-format', 'json'
     )
-    if ($Tools) {
+    if ($ClaudeAiConnectors) {
+        # --tools "" would hide the connector tools too, and the CLI defers
+        # most connector tools behind ToolSearch, so that one built-in stays.
+        # Connector tools are pre-approved by name through --allowedTools;
+        # nothing else gets permission, and there is no permission bypass.
+        $a += @('--tools', 'ToolSearch')
+        if ($Tools) { $a += @('--allowedTools', ('ToolSearch,' + $Tools)) }
+    } elseif ($Tools) {
         $a += @('--tools', $Tools, '--allowedTools', $Tools,
                 '--allow-dangerously-skip-permissions', '--dangerously-skip-permissions')
     } else {
