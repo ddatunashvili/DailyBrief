@@ -51,7 +51,9 @@ function Is-Ignored([string]$path) {
 }
 
 # ---------- activity from the monitor's event log ----------
-$events = @()
+# A List, not `$events += $e`: array += copies the whole array per event, and
+# two weeks of monitor log is tens of thousands of lines.
+$events = New-Object System.Collections.Generic.List[object]
 # The monitor's windows overlap by design, so the same change is logged many
 # times - dedupe or every count is inflated several-fold.
 $seen = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -64,12 +66,13 @@ for ($i = 0; $i -lt $ActiveDays; $i++) {
                     $e = $_ | ConvertFrom-Json
                     if (Is-Ignored ([string]$e.project)) { return }
                     $key = [string]$e.project + '|' + [string]$e.file + '|' + [string]$e.ts
-                    if ($seen.Add($key)) { $events += $e }
+                    if ($seen.Add($key)) { $events.Add($e) }
                 } catch {}
             }
         }
     }
 }
+$events = $events.ToArray()
 $eventDirs = @($events | Group-Object project | Sort-Object Count -Descending)
 
 # ---------- candidate roots: marker folders (depth 1-2) + observed activity ----------
@@ -182,25 +185,70 @@ function Read-Head([string]$path, [int]$len) {
     } catch { return '' }
 }
 
+# ---------- incremental rebuild ----------
+# This runs every 30 minutes, and most projects did not move in between. The
+# git log, the TODO scan over `git ls-files` and the readme/package reads are
+# the expensive part, so they are reused from the previous projects.json card
+# whenever the project's fingerprint is unchanged. Activity fields (changed14d,
+# recentFiles, lastTouched) and git status come from data already in hand and
+# are always fresh, so a reused card is never stale on what moved.
+$cachePath = Join-Path $base 'projects-cache.json'
+$prevCards = @{}
+$prevFp = @{}
+if (Test-Path $outFile) {
+    try {
+        $pj = ([string](Get-Content $outFile -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        foreach ($c in @($pj.projects)) { if ($c.dir) { $prevCards[([string]$c.dir).ToLowerInvariant()] = $c } }
+    } catch {}
+}
+if (Test-Path $cachePath) {
+    try {
+        $cj = ([string](Get-Content $cachePath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        foreach ($prop in @($cj.fp.PSObject.Properties)) { $prevFp[$prop.Name] = [string]$prop.Value }
+    } catch {}
+}
+$newFp = @{}
+$md5 = [System.Security.Cryptography.MD5]::Create()
+function Hash-Text([string]$s) {
+    return [BitConverter]::ToString($md5.ComputeHash([Text.Encoding]::UTF8.GetBytes($s))).Replace('-', '')
+}
+
+# PS 5.1 round-trips an empty array as $null or {}, and a reused card has to
+# serialize exactly like a freshly built one. The leading comma stops the
+# pipeline from unrolling the array on return: 0 or 1 items would not stay [].
+function AsStrArr($v) {
+    if ($null -eq $v) { return ,@() }
+    if ($v -is [PSCustomObject] -and @($v.PSObject.Properties).Count -eq 0) { return ,@() }
+    return ,@(@($v) | ForEach-Object { [string]$_ })
+}
+
+# Detect-Stack's plain `return @(...)` unrolls, so a fresh card carries a
+# one-item stack as a bare string and an empty one as {}. Every reader runs
+# stack through AsArr/arr(), but a reused card must still serialize exactly
+# like a fresh one, so it goes through the same kind of return.
+function Same-AsDetectStack($a) { return @($a) }
+
 $projects = @(foreach ($p in $picked) {
     $dir  = [string]$p.dir
     $name = Split-Path $dir -Leaf
     $parent = Split-Path $dir -Parent
     $label = if ($parent) { (Split-Path $parent -Leaf) + '\' + $name } else { $name }
 
-    $isGit = $false
-    $gitOut = git -C $dir rev-parse --is-inside-work-tree 2>$null
-    if ("$gitOut".Trim() -eq 'true') { $isGit = $true }
+    # One rev-parse answers three questions: is it a repo, its HEAD sha, its
+    # branch. A repo with no commits yet fails on HEAD; it still counts as git.
+    $isGit = $false; $headSha = ''; $branch = ''
+    $rp = @(git -C $dir rev-parse --is-inside-work-tree HEAD --abbrev-ref HEAD 2>$null | ForEach-Object { ([string]$_).Trim() })
+    if ($rp.Count -ge 1 -and $rp[0] -eq 'true') {
+        $isGit = $true
+        if ($rp.Count -ge 3) { $headSha = $rp[1]; $branch = $rp[2] }
+        else { $branch = "$(git -C $dir rev-parse --abbrev-ref HEAD 2>$null)".Trim() }
+    }
 
-    $branch = ''; $lastCommits = @(); $dirtyCount = 0; $dirtySample = @(); $lastCommitAt = ''
+    $lastCommits = @(); $dirtyCount = 0; $dirtySample = @(); $lastCommitAt = ''; $dirty = @()
     if ($isGit) {
-        $branch = "$(git -C $dir rev-parse --abbrev-ref HEAD 2>$null)".Trim()
-        $lastCommits = @(git -C $dir log -5 --format='%ad %s' --date=format:'%Y-%m-%d' 2>$null |
-            ForEach-Object { [string]$_ })
-        $lastCommitAt = "$(git -C $dir log -1 --format='%ad' --date=format:'%Y-%m-%d %H:%M' 2>$null)".Trim()
-        $dirty = @(git -C $dir status --porcelain 2>$null)
+        $dirty = @(git -C $dir status --porcelain 2>$null | ForEach-Object { [string]$_ })
         $dirtyCount = $dirty.Count
-        $dirtySample = @($dirty | Select-Object -First 8 | ForEach-Object { [string]$_ })
+        $dirtySample = @($dirty | Select-Object -First 8)
     }
 
     # Recently changed files inside this project, straight from the monitor log.
@@ -215,8 +263,62 @@ $projects = @(foreach ($p in $picked) {
     # Open work already written down in the code itself. Only git repos are
     # scanned, and the file list comes from `git ls-files`: a plain -Recurse
     # walks node_modules/.next and takes minutes per project.
+    $todoEligible = ($isGit -and ($recent.Count -gt 0 -or $dirtyCount -gt 0))
+
+    # Fingerprint. git: HEAD + status + the mtimes of the dirty files (status
+    # alone says " M x" whether x was edited once or ten times). Plain folder:
+    # the newest top-level mtime - its card only reads top-level files.
+    $key = $dir.ToLowerInvariant()
+    if ($isGit) {
+        $mt = @($dirty | Select-Object -First 50 | ForEach-Object {
+            $rel = ([string]$_)
+            if ($rel.Length -gt 3) { $rel = $rel.Substring(3) }
+            if ($rel -match ' -> ') { $rel = ($rel -split ' -> ')[-1] }
+            $rel = $rel.Trim('"')
+            $fi = Get-Item -LiteralPath (Join-Path $dir $rel) -ErrorAction SilentlyContinue
+            if ($fi) { [string]$fi.LastWriteTimeUtc.Ticks } else { '0' }
+        })
+        $fp = 'g|' + $headSha + '|' + $branch + '|' + (Hash-Text ((@($dirty) + @($mt)) -join "`n")) + '|' + $todoEligible
+    } else {
+        $newest = (Get-Item -LiteralPath $dir).LastWriteTimeUtc.Ticks
+        foreach ($ch in @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) {
+            if ($ch.LastWriteTimeUtc.Ticks -gt $newest) { $newest = $ch.LastWriteTimeUtc.Ticks }
+        }
+        $fp = 'd|' + $newest
+    }
+    $newFp[$key] = $fp
+    $prev = $prevCards[$key]
+    if ($prev -and $prevFp[$key] -eq $fp -and [bool]$prev.isGit -eq $isGit) {
+        @{
+            id           = $key.GetHashCode().ToString('x')
+            name         = $label
+            dir          = $dir
+            isGit        = $isGit
+            branch       = $branch
+            lastCommits  = (AsStrArr $prev.lastCommits)
+            lastCommitAt = [string]$prev.lastCommitAt
+            dirtyCount   = $dirtyCount
+            dirtySample  = $dirtySample
+            changed14d   = $recent.Count
+            recentFiles  = $recentFiles
+            lastTouched  = $lastTouched
+            stack        = Same-AsDetectStack (AsStrArr $prev.stack)
+            readme       = [string]$prev.readme
+            pkgDesc      = [string]$prev.pkgDesc
+            todoCount    = [int]$prev.todoCount
+            todoSample   = (AsStrArr $prev.todoSample)
+        }
+        continue
+    }
+
+    if ($isGit) {
+        $lastCommits = @(git -C $dir log -5 --format='%ad %s' --date=format:'%Y-%m-%d' 2>$null |
+            ForEach-Object { [string]$_ })
+        $lastCommitAt = "$(git -C $dir log -1 --format='%ad' --date=format:'%Y-%m-%d %H:%M' 2>$null)".Trim()
+    }
+
     $todoCount = 0; $todoSample = @()
-    if ($isGit -and ($recent.Count -gt 0 -or $dirtyCount -gt 0)) {
+    if ($todoEligible) {
         $codeExt = @('.js', '.ts', '.tsx', '.jsx', '.py', '.php', '.cs', '.go', '.rs', '.java', '.kt', '.vue', '.svelte')
         $codeFiles = @(git -C $dir ls-files 2>$null |
             Where-Object { $codeExt -contains [IO.Path]::GetExtension($_) } |
@@ -268,3 +370,6 @@ $projects = @(foreach ($p in $picked) {
 
 $out = @{ generatedAt = $now.ToString('yyyy-MM-dd HH:mm'); projects = $projects }
 [IO.File]::WriteAllText($outFile, ($out | ConvertTo-Json -Depth 6), $utf8)
+# Written after projects.json on purpose: a crash in between leaves an old
+# cache, which only costs one full rebuild, never a reused card that is wrong.
+[IO.File]::WriteAllText($cachePath, (@{ version = 1; fp = $newFp } | ConvertTo-Json -Depth 3 -Compress), $utf8)
