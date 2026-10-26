@@ -2,9 +2,9 @@
 #   -Mode ask    answers a free-text question about the project registry
 #   -Mode ideas  proposes 3 new features for ONE project (accept/decline in UI)
 # Same token diet as kanban-check.ps1: the script compresses everything into
-# ask-digest-<runid>.json, the model reads only that file and writes a small
-# ask-out-<runid>.json, and the script merges the result into ask-log.json /
-# ideas.json. The model never opens a project file itself.
+# ask-digest-<runid>.json, hands it to the model inline, gets a small
+# schema-checked JSON back (kept as ask-out-<runid>.json until merged), and
+# merges it into ask-log.json / ideas.json. The model has no tools at all.
 # ASCII-only on purpose (PS 5.1 encoding).
 param(
     [ValidateSet('ask', 'ideas')][string]$Mode = 'ask',
@@ -22,6 +22,7 @@ $OutputEncoding = [Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 . (Join-Path $PSScriptRoot 'paths.ps1')   # sets $app (install) and $base (this user's data)
+. (Join-Path $PSScriptRoot 'lock.ps1')    # Invoke-WithBoardLock (ideas.json)
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
@@ -37,6 +38,7 @@ if (Test-Path $outPath) { Remove-Item $outPath -Force }
 # at all - which the app used to journal as a successful run.
 try {
     . (Join-Path $PSScriptRoot 'claude-path.ps1')   # sets $claude
+    . (Join-Path $PSScriptRoot 'claude-run.ps1')    # Invoke-ClaudeLean
 } catch {
     [IO.File]::WriteAllText($log, ('[fatal] ' + $_.Exception.Message), $utf8NoBom)
     exit 3
@@ -291,42 +293,180 @@ if ($digestSize -gt 1MB) {
     exit 0
 }
 
-# The exact per-run file names go INTO the prompt: left to guess a suffixed
-# name the model spends turns listing the folder and can write its answer
-# where the script never looks for it.
-$prompt = (Get-Content (Join-Path $app $promptFile) -Raw -Encoding UTF8).
-    Replace('{{DATA}}', $base).
-    Replace('{{NOW}}', $now).
-    Replace('{{DIGEST}}', $digestPath).
-    Replace('{{OUT}}', $outPath)
+# The digest rides in the prompt and the answer comes back as structured
+# output: the model used to Read the digest and Write ask-out with tools,
+# three turns of a full CLI session for a one-shot answer, and a reply that
+# skipped the Write was a run with nothing saved. The digest file stays on
+# disk because the AI usage page shows it as "exactly what the AI was given".
+$digestJson = ([string](Get-Content $digestPath -Raw -Encoding UTF8)).TrimStart([char]0xFEFF)
+$prompt = "<digest>`n" + $digestJson + "`n</digest>`n`n" +
+    (Get-Content (Join-Path $app $promptFile) -Raw -Encoding UTF8).Replace('{{NOW}}', $now)
+
+function Str { return @{ type = 'string' } }
+function Arr($items) { return @{ type = 'array'; items = $items } }
+function Obj([hashtable]$props, [string[]]$req) {
+    return @{ type = 'object'; additionalProperties = $false; properties = $props; required = $req }
+}
+if ($Mode -eq 'ask') {
+    $schemaObj = Obj @{
+        answer = (Str)
+        projects = Arr (Str)
+        suggestedTasks = Arr (Obj @{ title = (Str); desc = (Str); dir = (Str) } @('title', 'desc', 'dir'))
+    } @('answer', 'projects', 'suggestedTasks')
+} else {
+    $schemaObj = Obj @{
+        ideas = Arr (Obj @{
+            title = (Str); desc = (Str); why = (Str)
+            effort = @{ type = 'string'; enum = @('S', 'M', 'L') }
+            subtasks = Arr (Str)
+        } @('title', 'desc', 'why', 'effort', 'subtasks'))
+    } @('ideas')
+}
+$schema = $schemaObj | ConvertTo-Json -Depth 20 -Compress
+
+# Same deterministic similarity as brief-apply.ps1: a reworded declined idea
+# is still a declined idea.
+$titleStop = @('a', 'an', 'the', 'and', 'or', 'to', 'for', 'of', 'in', 'on', 'with', 'from', 'into', 'by', 'at', 'is')
+function Title-Tokens([string]$s) {
+    $set = @{}
+    foreach ($w in ((Norm $s) -split '[^\p{L}\p{N}]+')) {
+        if ($w.Length -ge 2 -and $titleStop -notcontains $w) { $set[$w] = $true }
+    }
+    return $set
+}
+function Test-SimilarTitle([string]$a, [string]$b) {
+    $na = ((Norm $a) -replace '[^\p{L}\p{N}]+', ' ').Trim()
+    $nb = ((Norm $b) -replace '[^\p{L}\p{N}]+', ' ').Trim()
+    if (-not $na -or -not $nb) { return $false }
+    if ($na -eq $nb) { return $true }
+    $short = $na; $long = $nb
+    if ($na.Length -gt $nb.Length) { $short = $nb; $long = $na }
+    if ($short.Length -ge 8 -and $long.Contains($short)) { return $true }
+    $ta = Title-Tokens $a
+    $tb = Title-Tokens $b
+    if ($ta.Count -eq 0 -or $tb.Count -eq 0) { return $false }
+    $inter = 0
+    foreach ($k in $ta.Keys) { if ($tb.ContainsKey($k)) { $inter++ } }
+    return (($inter / [double]($ta.Count + $tb.Count - $inter)) -ge 0.6)
+}
+
+$knownDirs = @{}
+foreach ($p in $projects) { if ($p.dir) { $knownDirs[(Norm ([string]$p.dir))] = [string]$p.dir } }
+
+# Returns @{ clean; hard; soft }: hard = nothing usable, soft = single bad
+# items (left out of `clean`), worth one retry but not worth losing the run.
+function Test-AskOut($d) {
+    $hard = New-Object System.Collections.Generic.List[string]
+    $soft = New-Object System.Collections.Generic.List[string]
+    if ($Mode -eq 'ask') {
+        $answer = ([string]$d.answer).Trim()
+        if (-not $answer) { $hard.Add('answer is empty') }
+        # A dir the registry does not hold would render as a dead chip.
+        $projs = @(AsArr $d.projects | ForEach-Object { $knownDirs[(Norm ([string]$_))] } | Where-Object { $_ } |
+            Select-Object -Unique -First 6)
+        $sug = @()
+        foreach ($s in @(AsArr $d.suggestedTasks)) {
+            if (-not $s -or -not $s.title) { continue }
+            $sd = $knownDirs[(Norm ([string]$s.dir))]
+            if (-not $sd) { $soft.Add(('suggestedTasks "{0}": dir "{1}" is not a project dir from the digest' -f [string]$s.title, [string]$s.dir)); continue }
+            $dup = $null
+            foreach ($ot in $openTasks) { if (Test-SimilarTitle ([string]$s.title) ([string]$ot.title)) { $dup = [string]$ot.title; break } }
+            if ($dup) { $soft.Add(('suggestedTasks "{0}" repeats the open task "{1}"' -f [string]$s.title, $dup)); continue }
+            $sug += [ordered]@{ title = Cut ([string]$s.title) 120; desc = Cut ([string]$s.desc) 600; dir = $sd }
+        }
+        $clean = [ordered]@{ answer = $answer; projects = $projs; suggestedTasks = @($sug | Select-Object -First 3) }
+    } else {
+        $taken = @($declined) + @($accepted) + @($pending) + @(Tasks-For $Dir)
+        $ideas = @()
+        foreach ($it in @(AsArr $d.ideas)) {
+            if (-not $it -or -not $it.title -or -not $it.desc) { continue }
+            $dup = $null
+            foreach ($tt in $taken) { if (Test-SimilarTitle ([string]$it.title) ([string]$tt)) { $dup = [string]$tt; break } }
+            if ($dup) { $soft.Add(('idea "{0}" repeats "{1}", which is declined, accepted, pending or already a task' -f [string]$it.title, $dup)); continue }
+            $subs = @(AsArr $it.subtasks | Where-Object { $_ } | ForEach-Object { [string]$_ })
+            if ($subs.Count -lt 3) { $soft.Add(('idea "{0}" has {1} subtasks; it needs 3-6' -f [string]$it.title, $subs.Count)); continue }
+            $eff = [string]$it.effort
+            if (@('S', 'M', 'L') -notcontains $eff) { $eff = 'M' }
+            $ideas += [ordered]@{
+                title = Cut ([string]$it.title) 120; desc = Cut ([string]$it.desc) 700; why = Cut ([string]$it.why) 300
+                effort = $eff; subtasks = @($subs | Select-Object -First 6)
+            }
+            $taken += [string]$it.title
+        }
+        if ($ideas.Count -gt 3) { $ideas = @($ideas | Select-Object -First 3) }
+        if ($ideas.Count -eq 0) { $hard.Add('no usable idea: each needs a title, a desc and 3-6 subtasks, and must not repeat a listed one') }
+        elseif ($ideas.Count -lt 3) { $soft.Add(('only {0} usable ideas; exactly 3 are needed' -f $ideas.Count)) }
+        $sizes = @($ideas | ForEach-Object { $_.effort } | Sort-Object -Unique)
+        if ($ideas.Count -eq 3 -and $sizes.Count -ne 3) { $soft.Add('the three ideas must be one S, one M and one L') }
+        $clean = [ordered]@{ ideas = $ideas }
+    }
+    return @{ clean = $clean; hard = $hard; soft = $soft }
+}
+
+# Every attempt leaves its own CLI envelope in the log, but main.js reads
+# only the last one. After a retry, a combined line keeps the journal honest.
+function Add-CombinedUsage([string]$Log, $envs) {
+    $e = @($envs | Where-Object { $_ })
+    if ($e.Count -lt 2) { return }
+    $in = 0; $cr = 0; $cc = 0; $out = 0; $cost = 0.0; $turns = 0; $ms = 0
+    foreach ($x in $e) {
+        if ($x.usage) {
+            $in += [int]$x.usage.input_tokens; $out += [int]$x.usage.output_tokens
+            $cr += [int]$x.usage.cache_read_input_tokens; $cc += [int]$x.usage.cache_creation_input_tokens
+        }
+        $cost += [double]$x.total_cost_usd; $turns += [int]$x.num_turns; $ms += [int]$x.duration_ms
+    }
+    $last = $e[$e.Count - 1]
+    $line = [ordered]@{
+        type = 'result'; subtype = [string]$last.subtype; is_error = [bool]$last.is_error
+        num_turns = $turns; duration_ms = $ms; total_cost_usd = $cost
+        usage = [ordered]@{ input_tokens = $in; cache_creation_input_tokens = $cc; cache_read_input_tokens = $cr; output_tokens = $out }
+        result = ('combined usage of {0} attempts' -f $e.Count)
+    }
+    Add-Content -Path $Log -Value ($line | ConvertTo-Json -Depth 4 -Compress) -Encoding UTF8
+}
 
 Set-Location $base
-$ErrorActionPreference = 'Continue'
 # Judgment work, both modes: this is the one place where a cheaper model
-# shows immediately (generic advice, repeated ideas).
-$claudeArgs = @(
-    '-p',
-    '--model', 'sonnet',
-    '--allowedTools', 'Read,Write',
-    '--allow-dangerously-skip-permissions',
-    '--dangerously-skip-permissions',
-    '--max-turns', '6',
-    '--output-format', 'json'
-)
-$prompt | & $claude @claudeArgs 2>&1 | Out-File $log -Encoding utf8
-$ErrorActionPreference = 'Stop'
+# shows immediately (generic advice, repeated ideas). The system prompt is
+# ours: the user's own style hooks no longer reach the answer.
+$system = 'You are the project adviser inside DailyBrief, a personal desktop app. Write in plain, complete English sentences: no shorthand, no dropped articles, no telegraphic notes. Return only the structured output.'
+$envelopes = @()
+$best = $null
+$errs = @()
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+    $p = $prompt
+    if ($errs.Count -gt 0) {
+        $p += "`n`n## Your previous answer was rejected`nFix every problem below and return the complete corrected answer:`n- " + ($errs -join "`n- ")
+    }
+    $r = Invoke-ClaudeLean -Prompt $p -Log $log -System $system -Model 'sonnet' -Schema $schema
+    $envelopes += $r.envelope
+    if (-not $r.ok) {
+        Add-Content $log ('[info] attempt {0}: {1}' -f $attempt, $r.error)
+        $errs = @()
+        continue
+    }
+    try { $v = Test-AskOut $r.data }
+    catch { $v = @{ clean = $null; hard = @('answer could not be read: ' + $_.Exception.Message); soft = @() } }
+    if ($v.hard.Count -eq 0) {
+        $best = $v
+        if ($v.soft.Count -eq 0) { break }
+    }
+    $errs = @($v.hard) + @($v.soft)
+    Add-Content $log ('[info] attempt {0} failed validation: {1}' -f $attempt, ($errs -join '; '))
+}
+Add-CombinedUsage $log $envelopes
 
 # ---------- merge the answer (only the script writes the stores) ----------
-if (-not (Test-Path $outPath)) {
-    if (Recover-JsonFromLog $log $outPath @('answer', 'ideas', 'items', 'questions')) {
-        Add-Content $log '[info] no output file - answer recovered from the reply'
-    }
-}
-if (-not (Test-Path $outPath)) {
+# Same failure line as before (main.js translates it for the user): nothing
+# usable came back, nothing is saved.
+if (-not $best) {
     Add-Content $log '[warn] model wrote no output file'
     Add-Content $log ('[timing] ask total {0:N0}s' -f $stopwatch.Elapsed.TotalSeconds)
     exit 0
 }
+foreach ($s in @($best.soft)) { Add-Content $log ('[warn] dropped from model output: ' + $s) }
+[IO.File]::WriteAllText($outPath, ($best.clean | ConvertTo-Json -Depth 8), $utf8NoBom)
 
 $out = Read-Json $outPath
 if (-not $out) {
@@ -335,93 +475,90 @@ if (-not $out) {
 }
 
 if ($Mode -eq 'ask') {
-    $mutex = New-Object System.Threading.Mutex($false, 'DailyBriefAskWrite')
-    $got = $false
+    # board.lock, not a private mutex: main.js writes ask-log.json too (the
+    # user's question in ask:send) and can only take the shared lockfile.
     try {
-        $got = $mutex.WaitOne(30000)
-        $fresh = Read-Json $askLogPath
-        $msgs = @()
-        if ($fresh) { $msgs = @(AsArr $fresh.messages) }
-        $suggested = @(AsArr $out.suggestedTasks | Select-Object -First 3 | ForEach-Object {
-            New-Object PSObject -Property @{
-                title = Cut ([string]$_.title) 120
-                desc  = Cut ([string]$_.desc) 600
-                dir   = [string]$_.dir
-            }
-        })
-        $msgs += (New-Object PSObject -Property @{
-            id = ('a' + $runToken)
-            by = 'ai'
-            at = $stamp
-            text = [string]$out.answer
-            projects = @(AsArr $out.projects | Select-Object -First 6 | ForEach-Object { [string]$_ })
-            suggestedTasks = $suggested
-        })
-        if ($msgs.Count -gt 60) { $msgs = @($msgs | Select-Object -Last 60) }
-        [IO.File]::WriteAllText($askLogPath, (@{ messages = $msgs } | ConvertTo-Json -Depth 8), $utf8NoBom)
+        Invoke-WithBoardLock {
+            $fresh = Read-Json $askLogPath
+            $msgs = @()
+            if ($fresh) { $msgs = @(AsArr $fresh.messages) }
+            $suggested = @(AsArr $out.suggestedTasks | Select-Object -First 3 | ForEach-Object {
+                New-Object PSObject -Property @{
+                    title = Cut ([string]$_.title) 120
+                    desc  = Cut ([string]$_.desc) 600
+                    dir   = [string]$_.dir
+                }
+            })
+            $msgs += (New-Object PSObject -Property @{
+                id = ('a' + $runToken)
+                by = 'ai'
+                at = $stamp
+                text = [string]$out.answer
+                projects = @(AsArr $out.projects | Select-Object -First 6 | ForEach-Object { [string]$_ })
+                suggestedTasks = $suggested
+            })
+            if ($msgs.Count -gt 60) { $msgs = @($msgs | Select-Object -Last 60) }
+            [IO.File]::WriteAllText($askLogPath, (@{ messages = $msgs } | ConvertTo-Json -Depth 8), $utf8NoBom)
+        }
     } catch {
         Add-Content $log ('[warn] ask-log merge failed: ' + $_.Exception.Message)
-    } finally {
-        if ($got) { $mutex.ReleaseMutex() }
-        $mutex.Dispose()
     }
 }
 else {
-    $mutex = New-Object System.Threading.Mutex($false, 'DailyBriefIdeasWrite')
-    $got = $false
+    # The shared board lock, not a private mutex: main.js runs ideas for
+    # several projects in parallel, and every one of them rewrites the whole
+    # ideas.json - without the lock the last writer drops the others' cards.
     try {
-        $got = $mutex.WaitOne(30000)
-        $fresh = Read-Json $ideasPath
-        $entries = @(); $declinedAll = @(); $acceptedAll = @()
-        if ($fresh) {
-            $entries = @(AsArr $fresh.entries | Where-Object { (Norm ([string]$_.dir)) -ne (Norm $Dir) })
-            $declinedAll = @(AsArr $fresh.declined)
-            $acceptedAll = @(AsArr $fresh.accepted)
-        }
-        # Undecided ideas survive a regeneration - the user has not seen an
-        # answer to them yet. Only the empty slots are refilled, so the card
-        # always holds exactly three open suggestions. Decided ones are gone
-        # from the card; their titles live in accepted/declined.
-        $keep = @()
-        if ($fresh) {
-            foreach ($e in @(AsArr $fresh.entries)) {
-                if ((Norm ([string]$e.dir)) -ne (Norm $Dir)) { continue }
-                $keep = @(AsArr $e.ideas | Where-Object { [string]$_.state -eq 'new' } | Select-Object -First 3)
+        Invoke-WithBoardLock {
+            $fresh = Read-Json $ideasPath
+            $entries = @(); $declinedAll = @(); $acceptedAll = @()
+            if ($fresh) {
+                $entries = @(AsArr $fresh.entries | Where-Object { (Norm ([string]$_.dir)) -ne (Norm $Dir) })
+                $declinedAll = @(AsArr $fresh.declined)
+                $acceptedAll = @(AsArr $fresh.accepted)
             }
-        }
-        $need = 3 - @($keep).Count
-        if ($need -lt 0) { $need = 0 }
-        $i = 0
-        $newIdeas = @()
-        if ($need -gt 0) { $newIdeas = @(AsArr $out.ideas | Select-Object -First $need | ForEach-Object {
-            $i++
-            New-Object PSObject -Property @{
-                id = ('{0}-{1}' -f $runToken, $i)
-                title = Cut ([string]$_.title) 120
-                desc  = Cut ([string]$_.desc) 700
-                why   = Cut ([string]$_.why) 300
-                effort = [string]$_.effort
-                subtasks = @(AsArr $_.subtasks | Select-Object -First 8 | ForEach-Object { Cut ([string]$_) 160 })
-                state = 'new'
-                at = $stamp
-                taskId = ''
+            # Undecided ideas survive a regeneration - the user has not seen an
+            # answer to them yet. Only the empty slots are refilled, so the card
+            # always holds exactly three open suggestions. Decided ones are gone
+            # from the card; their titles live in accepted/declined.
+            $keep = @()
+            if ($fresh) {
+                foreach ($e in @(AsArr $fresh.entries)) {
+                    if ((Norm ([string]$e.dir)) -ne (Norm $Dir)) { continue }
+                    $keep = @(AsArr $e.ideas | Where-Object { [string]$_.state -eq 'new' } | Select-Object -First 3)
+                }
             }
-        }) }
-        $entries += (New-Object PSObject -Property @{
-            dir = [string]$Dir
-            name = [string]$proj.name
-            generatedAt = $now
-            signature = Project-Signature $proj
-            ideas = @($keep + $newIdeas)
-        })
-        if ($entries.Count -gt 60) { $entries = @($entries | Select-Object -Last 60) }
-        [IO.File]::WriteAllText($ideasPath,
-            (@{ entries = $entries; declined = $declinedAll; accepted = $acceptedAll } | ConvertTo-Json -Depth 8), $utf8NoBom)
+            $need = 3 - @($keep).Count
+            if ($need -lt 0) { $need = 0 }
+            $i = 0
+            $newIdeas = @()
+            if ($need -gt 0) { $newIdeas = @(AsArr $out.ideas | Select-Object -First $need | ForEach-Object {
+                $i++
+                New-Object PSObject -Property @{
+                    id = ('{0}-{1}' -f $runToken, $i)
+                    title = Cut ([string]$_.title) 120
+                    desc  = Cut ([string]$_.desc) 700
+                    why   = Cut ([string]$_.why) 300
+                    effort = [string]$_.effort
+                    subtasks = @(AsArr $_.subtasks | Select-Object -First 8 | ForEach-Object { Cut ([string]$_) 160 })
+                    state = 'new'
+                    at = $stamp
+                    taskId = ''
+                }
+            }) }
+            $entries += (New-Object PSObject -Property @{
+                dir = [string]$Dir
+                name = [string]$proj.name
+                generatedAt = $now
+                signature = Project-Signature $proj
+                ideas = @($keep + $newIdeas)
+            })
+            if ($entries.Count -gt 60) { $entries = @($entries | Select-Object -Last 60) }
+            [IO.File]::WriteAllText($ideasPath,
+                (@{ entries = $entries; declined = $declinedAll; accepted = $acceptedAll } | ConvertTo-Json -Depth 8), $utf8NoBom)
+        }
     } catch {
         Add-Content $log ('[warn] ideas merge failed: ' + $_.Exception.Message)
-    } finally {
-        if ($got) { $mutex.ReleaseMutex() }
-        $mutex.Dispose()
     }
 }
 

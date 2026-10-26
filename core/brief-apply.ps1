@@ -10,6 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'paths.ps1')   # sets $app (install) and $base (this user's data)
+. (Join-Path $PSScriptRoot 'lock.ps1')    # Invoke-WithBoardLock
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
 $now = Get-Date -Format 'yyyy-MM-dd HH:mm'
@@ -25,6 +26,36 @@ function Has($obj, [string]$name) {
     return ($obj -and $obj.PSObject.Properties[$name] -and $obj.$name)
 }
 function Norm-Title([string]$s) { return ($s + '').Trim().ToLowerInvariant() }
+
+# Title similarity, deterministic: the model is told not to recreate closed
+# work, but "Add dark mode toggle" vs "Dark mode: add the toggle" slips past
+# an exact-title check. Token Jaccard catches rewordings; the substring test
+# catches a title that is only a longer version of an existing one.
+$titleStop = @('a', 'an', 'the', 'and', 'or', 'to', 'for', 'of', 'in', 'on', 'with', 'from', 'into', 'by', 'at', 'is')
+function Title-Tokens([string]$s) {
+    $set = @{}
+    foreach ($w in ((Norm-Title $s) -split '[^\p{L}\p{N}]+')) {
+        if ($w.Length -ge 2 -and $titleStop -notcontains $w) { $set[$w] = $true }
+    }
+    return $set
+}
+function Test-SimilarTitle([string]$a, [string]$b) {
+    $na = ((Norm-Title $a) -replace '[^\p{L}\p{N}]+', ' ').Trim()
+    $nb = ((Norm-Title $b) -replace '[^\p{L}\p{N}]+', ' ').Trim()
+    if (-not $na -or -not $nb) { return $false }
+    if ($na -eq $nb) { return $true }
+    # Short titles ("UI", "docs") are a substring of half the board.
+    $short = $na; $long = $nb
+    if ($na.Length -gt $nb.Length) { $short = $nb; $long = $na }
+    if ($short.Length -ge 8 -and $long.Contains($short)) { return $true }
+    $ta = Title-Tokens $a
+    $tb = Title-Tokens $b
+    if ($ta.Count -eq 0 -or $tb.Count -eq 0) { return $false }
+    $inter = 0
+    foreach ($k in $ta.Keys) { if ($tb.ContainsKey($k)) { $inter++ } }
+    $union = $ta.Count + $tb.Count - $inter
+    return (($inter / [double]$union) -ge 0.6)
+}
 
 if (-not (Test-Path $In)) { '[warn] no model output at ' + $In; exit 2 }
 $out = Get-Content $In -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -123,111 +154,120 @@ if (Has $out 'goals') {
 # An answered question keeps its answer: the model proposes the list, it does
 # not get to erase what the user already replied.
 if ($out.PSObject.Properties['questions']) {
-    $prev = @{}
-    try {
-        $qj = Get-Content (Join-Path $base 'questions.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-        foreach ($q in @(AsArr $qj.questions)) { $prev[[string]$q.id] = $q }
-    } catch {}
-    $qs = @(AsArr $out.questions | Select-Object -First 3 | ForEach-Object {
-        $id = [string]$_.id
-        $old = $prev[$id]
-        New-Object PSObject -Property @{
-            id = $id
-            text = [string]$_.text
-            project = [string]$_.project
-            at = if ($old) { [string]$old.at } else { $Today }
-            answer = if ($old) { [string]$old.answer } else { '' }
-            answeredAt = if ($old) { [string]$old.answeredAt } else { '' }
-        }
-    })
-    [IO.File]::WriteAllText((Join-Path $base 'questions.json'),
-        (@{ questions = $qs } | ConvertTo-Json -Depth 6), $utf8NoBom)
-    'wrote questions.json ({0} open)' -f $qs.Count
+    # Locked: the app writes the user's answers into this same file.
+    Invoke-WithBoardLock {
+        $prev = @{}
+        try {
+            $qj = Get-Content (Join-Path $base 'questions.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($q in @(AsArr $qj.questions)) { $prev[[string]$q.id] = $q }
+        } catch {}
+        $qs = @(AsArr $out.questions | Select-Object -First 3 | ForEach-Object {
+            $id = [string]$_.id
+            $old = $prev[$id]
+            New-Object PSObject -Property @{
+                id = $id
+                text = [string]$_.text
+                project = [string]$_.project
+                at = if ($old) { [string]$old.at } else { $Today }
+                answer = if ($old) { [string]$old.answer } else { '' }
+                answeredAt = if ($old) { [string]$old.answeredAt } else { '' }
+            }
+        })
+        [IO.File]::WriteAllText((Join-Path $base 'questions.json'),
+            (@{ questions = $qs } | ConvertTo-Json -Depth 6), $utf8NoBom)
+        'wrote questions.json ({0} open)' -f $qs.Count
+    }
 }
 
 # ---------- 5. the board ----------
-# Same mutex as every other writer: a check run finishing at the same moment
-# must not lose its update to this merge, or the other way round.
+# Same lock as every other board writer: a check run finishing at the same
+# moment must not lose its update to this merge, or the other way round.
 if ($out.PSObject.Properties['kanban']) {
     $patch = $out.kanban
     $kanbanPath = Join-Path $base 'kanban.json'
     $valid = @('urgent', 'important', 'planning', 'delayed', 'active')
-    $mutex = New-Object System.Threading.Mutex($false, 'DailyBriefKanbanWrite')
-    $gotLock = $false
     try {
-        $gotLock = $mutex.WaitOne(30000)
-        if (-not $gotLock) { throw 'kanban.json lock timeout' }
-        $fresh = Get-Content $kanbanPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Invoke-WithBoardLock {
+            $fresh = Get-Content $kanbanPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
-        foreach ($u in @(AsArr $patch.updates)) {
-            if (-not $u -or -not $u.id) { continue }
-            $t = $fresh.tasks | Where-Object { $_.id -eq $u.id } | Select-Object -First 1
-            if (-not $t) { continue }
-            if (Has $u 'desc') { $t.desc = [string]$u.desc }
-            # An urgent task is the user's own escalation; a morning plan may
-            # not quietly demote it.
-            if ((Has $u 'status') -and $valid -contains [string]$u.status -and $t.status -ne 'urgent') {
-                $t.status = [string]$u.status
+            $applied = 0; $skippedUpd = 0
+            foreach ($u in @(AsArr $patch.updates)) {
+                if (-not $u -or -not $u.id) { continue }
+                # Open tasks only: a closed task is the user's verdict, and an
+                # id the board does not know is a model invention.
+                $t = @($fresh.tasks) | Where-Object { $_.id -eq $u.id -and -not $_.done } | Select-Object -First 1
+                if (-not $t) { $skippedUpd++; continue }
+                if (Has $u 'desc') { $t.desc = [string]$u.desc }
+                # An urgent task is the user's own escalation; a morning plan may
+                # not quietly demote it.
+                if ((Has $u 'status') -and $valid -contains [string]$u.status -and $t.status -ne 'urgent') {
+                    $t.status = [string]$u.status
+                }
+                if (Has $u 'subtasks') {
+                    $oldDone = @{}
+                    foreach ($os in @(AsArr $t.subtasks)) { if ($os.done) { $oldDone[[string]$os.text] = $true } }
+                    $newSubs = @(AsArr $u.subtasks | Select-Object -First 30 | ForEach-Object {
+                        $txt = [string]$_
+                        New-Object PSObject -Property @{ text = $txt; done = [bool]$oldDone[$txt] }
+                    })
+                    if ($t.PSObject.Properties['subtasks']) { $t.subtasks = $newSubs }
+                    else { $t | Add-Member -NotePropertyName subtasks -NotePropertyValue $newSubs }
+                }
+                if (Has $u 'note') {
+                    $notes = @(AsArr $t.aiNotes)
+                    $notes += (New-Object PSObject -Property @{ text = [string]$u.note; at = $now })
+                    if ($notes.Count -gt 10) { $notes = @($notes | Select-Object -Last 10) }
+                    if ($t.PSObject.Properties['aiNotes']) { $t.aiNotes = $notes }
+                    else { $t | Add-Member -NotePropertyName aiNotes -NotePropertyValue $notes }
+                }
+                # done stays the user's call, and comments are a conversation the
+                # planner has no business editing.
+                $t.updatedAt = $stamp
+                $applied++
             }
-            if (Has $u 'subtasks') {
-                $oldDone = @{}
-                foreach ($os in @(AsArr $t.subtasks)) { if ($os.done) { $oldDone[[string]$os.text] = $true } }
-                $newSubs = @(AsArr $u.subtasks | Select-Object -First 30 | ForEach-Object {
-                    $txt = [string]$_
-                    New-Object PSObject -Property @{ text = $txt; done = [bool]$oldDone[$txt] }
-                })
-                if ($t.PSObject.Properties['subtasks']) { $t.subtasks = $newSubs }
-                else { $t | Add-Member -NotePropertyName subtasks -NotePropertyValue $newSubs }
+
+            # Dedupe on ids AND on similar titles, across open, done and archived
+            # tasks, so a reworded version of finished work cannot come back as new.
+            $freshArchive = @(@(AsArr $fresh.archive) + @(Get-ColdArchive))
+            $existingIds = @(@($fresh.tasks | ForEach-Object { [string]$_.id }) + @($freshArchive | ForEach-Object { [string]$_.id }))
+            $existingTitles = New-Object System.Collections.Generic.List[string]
+            foreach ($x in @(@($fresh.tasks) + $freshArchive)) { if ($x -and $x.title) { $existingTitles.Add([string]$x.title) } }
+            $added = 0; $dupes = 0
+            foreach ($n in @(AsArr $patch.newTasks)) {
+                if (-not $n -or -not $n.id -or -not $n.title) { continue }
+                if ($existingIds -contains [string]$n.id) { $dupes++; continue }
+                $similar = $null
+                foreach ($et in $existingTitles) { if (Test-SimilarTitle ([string]$n.title) $et) { $similar = $et; break } }
+                if ($similar) {
+                    $dupes++
+                    'dropped new task "{0}": too close to existing "{1}"' -f [string]$n.title, $similar
+                    continue
+                }
+                $dirs = @()
+                if ((Has $n 'dir') -and (Test-Path ([string]$n.dir))) { $dirs = @([string]$n.dir) }
+                $subs = @(AsArr $n.subtasks | Select-Object -First 15 |
+                    ForEach-Object { New-Object PSObject -Property @{ text = [string]$_; done = $false } })
+                $nt = New-Object PSObject -Property @{
+                    id = [string]$n.id; title = [string]$n.title; desc = [string]$n.desc
+                    status = if ($valid -contains [string]$n.status) { [string]$n.status } else { 'planning' }
+                    done = $false; createdBy = 'ai'
+                    createdAt = $stamp; updatedAt = $stamp
+                    comments = @(); aiNotes = @(); dirs = $dirs; subtasks = $subs
+                }
+                # A task born without evidence rots: bind the folder immediately.
+                if ($dirs.Count -gt 0) {
+                    $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$n.id) -Dir ([string]$dirs[0]) 2>$null
+                }
+                $fresh.tasks = @($fresh.tasks) + $nt
+                $existingIds += [string]$n.id
+                $existingTitles.Add([string]$n.title)
+                $added++
             }
-            if (Has $u 'note') {
-                $notes = @(AsArr $t.aiNotes)
-                $notes += (New-Object PSObject -Property @{ text = [string]$u.note; at = $now })
-                if ($notes.Count -gt 10) { $notes = @($notes | Select-Object -Last 10) }
-                if ($t.PSObject.Properties['aiNotes']) { $t.aiNotes = $notes }
-                else { $t | Add-Member -NotePropertyName aiNotes -NotePropertyValue $notes }
-            }
-            # done stays the user's call, and comments are a conversation the
-            # planner has no business editing.
-            $t.updatedAt = $stamp
+
+            [IO.File]::WriteAllText($kanbanPath, ($fresh | ConvertTo-Json -Depth 10), $utf8NoBom)
+            'kanban: {0} updates ({1} unknown or closed ids skipped), {2} new tasks ({3} duplicates dropped)' -f $applied, $skippedUpd, $added, $dupes
         }
-
-        # Dedupe on ids AND on normalized titles, across tasks and archive, so
-        # a reworded version of finished work cannot come back as new.
-        $freshArchive = @(AsArr $fresh.archive)
-        $existingIds = @(@($fresh.tasks | ForEach-Object { [string]$_.id }) + @($freshArchive | ForEach-Object { [string]$_.id }))
-        $existingTitles = @(@($fresh.tasks | ForEach-Object { Norm-Title $_.title }) + @($freshArchive | ForEach-Object { Norm-Title $_.title }))
-        $added = 0
-        foreach ($n in @(AsArr $patch.newTasks)) {
-            if (-not $n -or -not $n.id -or -not $n.title) { continue }
-            $titleNorm = Norm-Title $n.title
-            if ($existingIds -contains [string]$n.id -or $existingTitles -contains $titleNorm) { continue }
-            $dirs = @()
-            if ((Has $n 'dir') -and (Test-Path ([string]$n.dir))) { $dirs = @([string]$n.dir) }
-            $subs = @(AsArr $n.subtasks | Select-Object -First 15 |
-                ForEach-Object { New-Object PSObject -Property @{ text = [string]$_; done = $false } })
-            $nt = New-Object PSObject -Property @{
-                id = [string]$n.id; title = [string]$n.title; desc = [string]$n.desc
-                status = if ($valid -contains [string]$n.status) { [string]$n.status } else { 'planning' }
-                done = $false; createdBy = 'ai'
-                createdAt = $stamp; updatedAt = $stamp
-                comments = @(); aiNotes = @(); dirs = $dirs; subtasks = $subs
-            }
-            # A task born without evidence rots: bind the folder immediately.
-            if ($dirs.Count -gt 0) {
-                $null = & (Join-Path $app 'scan-folder.ps1') -TaskId ([string]$n.id) -Dir ([string]$dirs[0]) 2>$null
-            }
-            $fresh.tasks = @($fresh.tasks) + $nt
-            $existingIds += [string]$n.id
-            $existingTitles += $titleNorm
-            $added++
-        }
-
-        [IO.File]::WriteAllText($kanbanPath, ($fresh | ConvertTo-Json -Depth 10), $utf8NoBom)
-        'kanban: {0} updates, {1} new tasks' -f @(AsArr $patch.updates).Count, $added
     } catch {
         '[warn] kanban merge failed: ' + $_.Exception.Message
-    } finally {
-        if ($gotLock) { $mutex.ReleaseMutex() }
-        $mutex.Dispose()
     }
 }
