@@ -42,3 +42,11 @@ core/execute-out*.json
 core/execute-request.json
 core/publish-*.html
 core/publish.json
+
+# personal data written by the incremental registry and the board compactor
+core/projects-cache.json
+core/kanban-archive.json
+
+# eval harness (npm run eval): fixtures live in the OS temp dir; --report output
+eval-out/
+core/board.lock

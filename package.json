@@ -7,6 +7,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test \"test/*.test.js\"",
+    "eval": "node scripts/eval.js",
     "build": "electron-builder --win dir",
     "release": "electron-builder --win --publish always"
   },
