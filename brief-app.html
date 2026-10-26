@@ -363,6 +363,9 @@
   .kb-copy:hover { color: var(--accent); border-color: var(--accent); }
   .kb-copy.ok { color: var(--ok); border-color: var(--ok); opacity: 1; }
   .kb-copy .ic { width: 12px; height: 12px; }
+  /* Open the task's folder: sits left of the copy button, same hover reveal. */
+  .kb-copy.kb-open { right: 1.85rem; }
+  .kb-copy.bad { color: var(--crit); border-color: var(--crit); opacity: 1; }
   /* completion of a card = its checklist, shown as a bar + percent */
   .kb-prog { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.45rem; }
   .kb-prog-track { flex: 1; height: 4px; background: var(--track); border-radius: 99px; overflow: hidden; }
@@ -1367,6 +1370,17 @@ const BRIEF = {
     copyBtn.draggable = false;
     copyBtn.addEventListener("dragstart", function (e) { e.preventDefault(); e.stopPropagation(); });
     card.appendChild(copyBtn);
+    if ((t.dirs || []).length && api && api.projectsOpen) {
+      var openBtn = el("button", "kb-copy kb-open", icon("folder"));
+      openBtn.title = "Open the project folder - " + t.dirs[0];
+      openBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        openTaskFolder(t, openBtn);
+      });
+      openBtn.draggable = false;
+      openBtn.addEventListener("dragstart", function (e) { e.preventDefault(); e.stopPropagation(); });
+      card.appendChild(openBtn);
+    }
     card.draggable = true;
     card.addEventListener("dragstart", function (e) {
       dragging = true;
@@ -1379,6 +1393,17 @@ const BRIEF = {
     });
     card.addEventListener("click", function () { if (!dragging) openModal(t.id); });
     return card;
+  }
+
+  // First linked folder that still exists; a moved folder is flagged on the
+  // button (red, path in the tooltip) instead of failing silently.
+  async function openTaskFolder(t, btn) {
+    var dirs = t.dirs || [];
+    for (var i = 0; i < dirs.length; i++) {
+      if (await api.projectsOpen(dirs[i])) { btn.classList.remove("bad"); return; }
+    }
+    btn.classList.add("bad");
+    btn.title = "Folder not found - " + dirs.join(", ") + ". The next check relinks it if it moved into a work folder.";
   }
 
   /* Grouped board: the cards of one project sit together inside every column,
@@ -1608,6 +1633,12 @@ const BRIEF = {
     mCopy.title = "Title, folders, description and checklist - as text, for an AI prompt";
     mCopy.addEventListener("click", function () { copyTaskToClipboard(t, mCopy); });
     meta.appendChild(mCopy);
+    if ((t.dirs || []).length && api && api.projectsOpen) {
+      var mOpen = el("button", "kb-copy-btn", icon("folder") + "Open folder");
+      mOpen.title = t.dirs.join(", ");
+      mOpen.addEventListener("click", function () { openTaskFolder(t, mOpen); });
+      meta.appendChild(mOpen);
+    }
     m.appendChild(meta);
 
     var progWrap = el("div", "kb-m-progwrap");
